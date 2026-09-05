@@ -27,7 +27,7 @@ Built because you personally watch NBA League Pass the morning after games (Isra
 - Each streaming service (League Pass, DAZN, third service) runs as an independent embedded browser instance — Electron's `WebContentsView` (the current API; `BrowserView` is deprecated but equivalent).
 - Each instance is a real, unmodified browser session: its own cookies, its own login, its own DRM negotiation. Nothing is scraped, merged, or intercepted — from the streaming service's perspective, this is indistinguishable from opening their site in a normal browser tab.
 - Custom shell UI (header, grid layout, pane chrome, service badges) wraps these embedded sessions — needs real design attention so it doesn't look like "iframes stapled together."
-- **DRM note:** stock Electron has no bundled Widevine CDM. Using the [castlabs/electron-releases](https://github.com/castlabs/electron-releases) fork (`wvcus` builds), which manages the Widevine CDM via Electron's Component Updater. Dev/VMP-signed builds work against Widevine UAT and most real license servers for testing; production distribution would need castlabs' EVS signing service.
+- **DRM note:** stock Electron has no bundled Widevine CDM. Using the [castlabs/electron-releases](https://github.com/castlabs/electron-releases) fork (`wvcus` builds), which manages the Widevine CDM via Electron's Component Updater. **Confirmed by testing:** the dev-signed build's CDM works fine against open test streams (Shaka Player demo), but real commercial license servers (NBA League Pass) reject it outright (`DRM_FAILED_LICENSE_REQUEST`) until the packaged app is VMP-signed via castlabs' free EVS service. After signing (`evs-vmp sign-pkg`), League Pass playback works. **This means: every packaged build must go through EVS signing after any binary change — dev mode (`npm start`) will never work against real services, only a signed, packaged build will.**
 
 ### 3.2 Multi-pane concurrent viewing
 
@@ -108,4 +108,14 @@ Pipeline:
 
 ## Status
 
-- **Phase 1: in progress.** Scaffold created (Electron + `WebContentsView`, single pane loading `nba.com/watch`). Next: confirm the castlabs Widevine build actually plays protected League Pass content end-to-end.
+- **Phase 1: DRM validated, core milestone met.** Scaffold created (Electron + `WebContentsView`, single pane loading `nba.com/watch`). Confirmed end-to-end: a VMP-signed, packaged build plays real League Pass content with working DRM. Remaining for Phase 1: proper macOS code signing for a shippable build, app icon, and shell UI polish (currently a bare header).
+
+### Build & test workflow (until this is scripted)
+
+```bash
+npm run pack                                   # package into dist/mac-arm64/CourtSide.app
+.evs-venv/bin/evs-vmp sign-pkg dist/mac-arm64  # VMP-sign (required for real DRM playback)
+open dist/mac-arm64/CourtSide.app
+```
+
+EVS account credentials/tokens live in `~/.config/evs`, outside the repo. `.evs-venv/` (the local Python tool for `evs-vmp`) and `dist/` are gitignored.

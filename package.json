@@ -5,9 +5,25 @@
   "description": "Desktop shell for concurrent multi-game sports streaming with spoiler-safe skip.",
   "main": "src/main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "pack": "electron-builder --dir --mac"
   },
   "devDependencies": {
-    "electron": "github:castlabs/electron-releases#v44.1.0+wvcus"
+    "electron": "github:castlabs/electron-releases#v44.1.0+wvcus",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.courtside.app",
+    "productName": "CourtSide",
+    "electronDist": "node_modules/electron/dist",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*"
+    ],
+    "mac": {
+      "identity": null
+    }
   }
 }
