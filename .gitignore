@@ -1,5 +1,6 @@
 node_modules/
 dist/
 out/
+.evs-venv/
 .DS_Store
 *.log
