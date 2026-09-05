@@ -6,7 +6,11 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "pack": "electron-builder --dir --mac"
+    "pack": "electron-builder --dir --mac",
+    "sign:vmp": ".evs-venv/bin/evs-vmp sign-pkg dist/mac-arm64",
+    "sign:codesign": "codesign --deep --force --sign - dist/mac-arm64/CourtSide.app",
+    "build:mac": "npm run pack && npm run sign:vmp && npm run sign:codesign",
+    "open": "open dist/mac-arm64/CourtSide.app"
   },
   "devDependencies": {
     "electron": "github:castlabs/electron-releases#v44.1.0+wvcus",
@@ -23,7 +27,8 @@
       "src/**/*"
     ],
     "mac": {
-      "identity": null
+      "identity": null,
+      "icon": "build/icon.icns"
     }
   }
 }

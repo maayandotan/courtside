@@ -4,15 +4,119 @@
 <meta charset="utf-8">
 <title>CourtSide</title>
 <style>
-  :root { color-scheme: dark; }
-  body { margin: 0; height: 56px; display: flex; align-items: center; padding: 0 16px;
-         background: #14161a; color: #e8e8ea; font-family: -apple-system, sans-serif; }
-  .badge { padding: 4px 10px; border-radius: 6px; background: #1d63ff; font-size: 13px; font-weight: 600; }
-  h1 { font-size: 15px; margin: 0 0 0 12px; font-weight: 500; color: #9a9ba3; }
+  :root {
+    color-scheme: dark;
+    --bg: #0b0c0f;
+    --header-bg: #14161a;
+    --accent: #1d63ff;
+    --text: #e8e8ea;
+    --muted: #9a9ba3;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--accent);
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    color: var(--text);
+  }
+  body { display: flex; flex-direction: column; }
+
+  header {
+    height: 56px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 0 16px;
+    background: var(--header-bg);
+  }
+  .wordmark { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; }
+  .badge {
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: var(--accent);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .subtitle { font-size: 13px; color: var(--muted); margin-left: auto; }
+
+  #content { position: relative; flex: 1 1 auto; }
+  #skeleton, #error-state {
+    position: absolute;
+    inset: 2px;
+    background: var(--bg);
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+  }
+
+  .skeleton-bar {
+    background: var(--header-bg);
+    border-radius: 8px;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  #skeleton .skeleton-bar:nth-child(1) { width: 340px; height: 20px; }
+  #skeleton .skeleton-bar:nth-child(2) { width: 520px; height: 300px; }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.45; }
+    50% { opacity: 0.9; }
+  }
+
+  #error-state svg { width: 40px; height: 40px; stroke: var(--muted); }
+  #error-message { font-size: 14px; color: var(--muted); max-width: 360px; text-align: center; }
+  #retry-btn {
+    padding: 8px 18px;
+    border-radius: 6px;
+    border: none;
+    background: var(--accent);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  #retry-btn:hover { filter: brightness(1.1); }
 </style>
 </head>
 <body>
-  <span class="badge">League Pass</span>
-  <h1>CourtSide — Phase 1 (single pane, DRM validation)</h1>
+  <header>
+    <span class="badge">League Pass</span>
+    <span class="wordmark">CourtSide</span>
+    <span class="subtitle">Phase 1 &mdash; single pane, DRM validated</span>
+  </header>
+
+  <div id="content">
+    <div id="skeleton">
+      <div class="skeleton-bar"></div>
+      <div class="skeleton-bar"></div>
+    </div>
+    <div id="error-state">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/>
+      </svg>
+      <div id="error-message">Stream failed to load.</div>
+      <button id="retry-btn">Retry</button>
+    </div>
+  </div>
+
+  <script>
+    const skeleton = document.getElementById('skeleton');
+    const errorState = document.getElementById('error-state');
+    const errorMessage = document.getElementById('error-message');
+
+    window.courtside.onPaneStatus((status) => {
+      skeleton.style.display = status.state === 'loading' ? 'flex' : 'none';
+      errorState.style.display = status.state === 'error' ? 'flex' : 'none';
+      if (status.state === 'error') {
+        errorMessage.textContent = status.message || 'Stream failed to load.';
+      }
+    });
+
+    document.getElementById('retry-btn').addEventListener('click', () => {
+      window.courtside.retryPane();
+    });
+  </script>
 </body>
 </html>

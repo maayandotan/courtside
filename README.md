@@ -108,14 +108,15 @@ Pipeline:
 
 ## Status
 
-- **Phase 1: DRM validated, core milestone met.** Scaffold created (Electron + `WebContentsView`, single pane loading `nba.com/watch`). Confirmed end-to-end: a VMP-signed, packaged build plays real League Pass content with working DRM. Remaining for Phase 1: proper macOS code signing for a shippable build, app icon, and shell UI polish (currently a bare header).
+- **Phase 1: complete.** Electron scaffold (`WebContentsView`) loads NBA League Pass. DRM confirmed working end-to-end in a VMP-signed, packaged build. App is ad-hoc code-signed (no paid Apple Developer ID yet — fine for local personal use; only needed if distributing to other machines). Custom app icon. Shell UI has a real loading skeleton and error/retry state instead of a blank Chromium load screen, plus the 2px accent-border "focused pane" framing from the design doc (the single pane is implicitly focused for now).
 
-### Build & test workflow (until this is scripted)
+### Build & test workflow
 
 ```bash
-npm run pack                                   # package into dist/mac-arm64/CourtSide.app
-.evs-venv/bin/evs-vmp sign-pkg dist/mac-arm64  # VMP-sign (required for real DRM playback)
-open dist/mac-arm64/CourtSide.app
+npm run build:mac   # package + VMP-sign + ad-hoc codesign, in one step
+npm run open         # launch dist/mac-arm64/CourtSide.app
 ```
 
-EVS account credentials/tokens live in `~/.config/evs`, outside the repo. `.evs-venv/` (the local Python tool for `evs-vmp`) and `dist/` are gitignored.
+Individual steps (`npm run pack`, `npm run sign:vmp`, `npm run sign:codesign`) are also available. **Any binary change requires the full `build:mac` before testing against real DRM** — `npm start` (dev mode) will never get a license from League Pass, only a signed packaged build will.
+
+EVS account credentials/tokens live in `~/.config/evs`, outside the repo. `.evs-venv/` (the local Python tool for `evs-vmp`) and `dist/` are gitignored. The app icon source (`build/icon.icns`) was generated with `scripts/gen_icon.py` (needs Pillow, not a project dependency) — it's a placeholder abstract mark, not a literal basketball; revisit in the Phase 5 design pass.
