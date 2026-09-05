@@ -1,3 +1,4 @@
+const fs = require('fs');
 const path = require('path');
 const { app, components, globalShortcut, ipcMain, BrowserWindow, WebContentsView } = require('electron');
 
@@ -124,6 +125,7 @@ function createWindow() {
           if (content.length === 0) return; // keep watching
           variantManifestText = content;
           console.log('variant manifest captured, length', content.length);
+          fs.writeFileSync(path.join(app.getPath('desktop'), 'courtside_variant_debug.m3u8'), content);
         })
         .catch((e) => console.error('Fetch.getResponseBody failed:', e.message))
         .finally(() => {
@@ -133,6 +135,93 @@ function createWindow() {
   } catch (e) {
     console.error('debugger attach failed:', e.message);
   }
+
+  globalShortcut.register('CommandOrControl+Shift+P', async () => {
+    try {
+      const result = await paneView.webContents.executeJavaScript(`
+        (() => {
+          const knownNames = [
+            'jwplayer', 'videojs', 'Hls', 'hls', 'shaka', 'bitmovin',
+            'THEOplayer', 'dashjs', 'player', 'videoPlayer', 'akamaiPlayer',
+            'conviva', 'nbaPlayer', 'ovp', 'OVP',
+          ];
+          let knownHits = [];
+          try {
+            knownHits = knownNames.filter((k) => {
+              try { return k in window; } catch (e) { return false; }
+            });
+          } catch (e) {}
+
+          const seekHits = [];
+          try {
+            for (const key of Object.getOwnPropertyNames(window)) {
+              try {
+                const val = window[key];
+                if (val && typeof val === 'object' &&
+                    (typeof val.seek === 'function' || typeof val.seekTo === 'function')) {
+                  seekHits.push({
+                    key,
+                    hasSeek: typeof val.seek === 'function',
+                    hasSeekTo: typeof val.seekTo === 'function',
+                  });
+                }
+              } catch (e) { /* skip properties that throw on access */ }
+            }
+          } catch (e) {}
+
+          let hasVideo = false;
+          let videoOwnProps = [];
+          try {
+            const video = document.querySelector('video');
+            hasVideo = !!video;
+            if (video) {
+              const nativeProps = new Set();
+              let proto = Object.getPrototypeOf(video);
+              while (proto) {
+                Object.getOwnPropertyNames(proto).forEach((p) => nativeProps.add(p));
+                proto = Object.getPrototypeOf(proto);
+              }
+              videoOwnProps = Object.getOwnPropertyNames(video).filter((k) => !nativeProps.has(k));
+            }
+          } catch (e) {}
+
+          function looksLikePlayer(obj) {
+            return obj && typeof obj === 'object' &&
+              typeof obj.play === 'function' &&
+              (typeof obj.seek === 'function' || typeof obj.seekTo === 'function');
+          }
+          const fiberHits = [];
+          try {
+            const video = document.querySelector('video');
+            const fiberKey = video && Object.getOwnPropertyNames(video).find((k) => k.startsWith('__reactFiber$'));
+            if (fiberKey) {
+              let fiber = video[fiberKey];
+              let depth = 0;
+              while (fiber && depth < 25) {
+                const candidates = { stateNode: fiber.stateNode, memoizedProps: fiber.memoizedProps, memoizedState: fiber.memoizedState };
+                for (const [where, c] of Object.entries(candidates)) {
+                  if (!c || typeof c !== 'object') continue;
+                  if (looksLikePlayer(c)) fiberHits.push({ depth, where });
+                  try {
+                    for (const k of Object.keys(c)) {
+                      if (looksLikePlayer(c[k])) fiberHits.push({ depth, where: where + '.' + k });
+                    }
+                  } catch (e) {}
+                }
+                fiber = fiber.return;
+                depth++;
+              }
+            }
+          } catch (e) {}
+
+          return { knownHits, seekHits, hasVideo, videoOwnProps, fiberHits };
+        })()
+      `);
+      console.log('player scan result:', JSON.stringify(result, null, 2));
+    } catch (err) {
+      console.error('player scan failed:', err);
+    }
+  });
 
   globalShortcut.register('CommandOrControl+Shift+2', async () => {
     if (!variantManifestText) {
@@ -151,10 +240,44 @@ function createWindow() {
     try {
       const seekResult = await paneView.webContents.executeJavaScript(`
         (() => {
-          const v = document.querySelector('video');
-          if (!v) return 'no video element found';
-          v.currentTime = ${result.target};
-          return 'seeked to ' + v.currentTime;
+          function looksLikePlayer(obj) {
+            return obj && typeof obj === 'object' &&
+              typeof obj.play === 'function' &&
+              (typeof obj.seek === 'function' || typeof obj.seekTo === 'function');
+          }
+          const video = document.querySelector('video');
+          if (!video) return 'no video element found';
+          const fiberKey = Object.getOwnPropertyNames(video).find((k) => k.startsWith('__reactFiber$'));
+          if (!fiberKey) return 'no react fiber key on video element';
+          let fiber = video[fiberKey];
+          let depth = 0;
+          while (fiber && depth < 25) {
+            const stateNode = fiber.stateNode;
+            if (looksLikePlayer(stateNode)) {
+              if (typeof stateNode.seek === 'function') {
+                stateNode.seek(${result.target});
+                return 'called player.seek(${result.target}) at depth ' + depth;
+              }
+              stateNode.seekTo(${result.target});
+              return 'called player.seekTo(${result.target}) at depth ' + depth;
+            }
+            if (stateNode && typeof stateNode === 'object') {
+              for (const k of Object.keys(stateNode)) {
+                if (looksLikePlayer(stateNode[k])) {
+                  const p = stateNode[k];
+                  if (typeof p.seek === 'function') {
+                    p.seek(${result.target});
+                    return 'called stateNode.' + k + '.seek(${result.target}) at depth ' + depth;
+                  }
+                  p.seekTo(${result.target});
+                  return 'called stateNode.' + k + '.seekTo(${result.target}) at depth ' + depth;
+                }
+              }
+            }
+            fiber = fiber.return;
+            depth++;
+          }
+          return 'no player instance found in fiber tree';
         })()
       `);
       console.log('skip-to-2nd-half:', seekResult);
