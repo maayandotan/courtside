@@ -125,4 +125,17 @@ EVS account credentials/tokens live in `~/.config/evs`, outside the repo. `.evs-
 
   Built an interactive calibration tool alongside this — `Cmd+Shift+3` dumps the full discontinuity/gap table, `Cmd+Shift+2` seeks to the current guess, `Cmd+Shift+[`/`Cmd+Shift+]` step to the previous/next discontinuity and seek there. This is how the heuristic bug was actually found and fixed (converging live against the on-screen game clock, not blind rebuild-and-guess cycles), and it's worth keeping as a real feature, not just a dev tool: a single tap to nudge is a reasonable UX for the rare miss, and it never exposes more than the immediately-adjacent break's game state.
 
+  **Broader validation (9 real games tested, 2026-09-06):** raised a fair concern — NBA rules only guarantee *mandatory* timeouts are symmetric between halves (2 per quarter minimum); coaches can call extra discretionary timeouts asymmetrically, so "middle by count" is a statistical heuristic, not a rule-guaranteed one. Tested across regular season, playoff, and Finals games to check:
+
+  | Content | Discontinuities | Result |
+  |---|---|---|
+  | Regular season ×6 | 12, 12, 12, 14, 12, 12 | 4 exact hits, 2 misses fixed with one `Cmd+Shift+[`/`]` tap |
+  | Finals (2026, Game 4) | **0** | Not supported — see below |
+  | Finals (different game) | 12 | Exact hit |
+  | Playoff | 12 | Exact hit (despite a ~25 min gap-before, likely an extended playoff halftime show) |
+
+  Net: 7/8 automatic hits on content that has discontinuity markers at all, 8/8 within one manual nudge. Misses were off by exactly one index both times, not wildly off. Playoff and Finals broadcasts mostly behave identically to regular season — this isn't a "postseason is different" problem.
+
+  **Known v1 limitation, confirmed real:** this year's Finals Game 4 has **zero** `#EXT-X-DISCONTINUITY` markers in its manifest — a fundamentally different broadcast pipeline (probably no server-side ad-stitching for that content), not something the current approach can work around at all. Handled gracefully: the app detects zero discontinuities, logs a clear "not supported for this broadcast" message, and does nothing further (no seek attempt, no crash, no infinite re-capture loop). Root cause of *which* broadcasts lack these markers is unexplored — deferred to v2, out of scope for now per explicit decision.
+
   **Not yet done:** this only finds the Q2→Q3 (halftime) boundary. Generalizing to "jump to any quarter" needs figuring out Q1→Q2 and Q3→Q4 boundaries too — "middle by count" doesn't directly generalize to those. Also untested: whether this manifest structure and the Bitmovin/React-fiber seek approach hold up on Yes STING, or on live (non-VOD) League Pass streams.

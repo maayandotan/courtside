@@ -156,6 +156,7 @@ function createWindow() {
   // Fetch domain and read the body Chromium already has, then let the
   // response continue untouched.
   const debug = paneView.webContents.debugger;
+  let manifestCaptured = false;
   let discontinuities = [];
   let totalDuration = 0;
   let candidateIndex = -1;
@@ -163,6 +164,17 @@ function createWindow() {
   const MAX_ATTEMPTS = 30;
 
   const logCandidate = (label) => {
+    if (!manifestCaptured) {
+      console.log('calibrate: no manifest captured yet — is a game playing?');
+      return;
+    }
+    if (discontinuities.length === 0) {
+      console.log(
+        'calibrate: this broadcast has no #EXT-X-DISCONTINUITY markers — ' +
+          'skip-to-2nd-half is not supported for this content (known v1 limitation, e.g. seen on a 2026 Finals game).'
+      );
+      return;
+    }
     if (candidateIndex < 0 || candidateIndex >= discontinuities.length) {
       console.log(`calibrate: index ${candidateIndex} out of range (0..${discontinuities.length - 1})`);
       return;
@@ -176,11 +188,9 @@ function createWindow() {
   };
 
   const seekToCandidate = async (label) => {
-    if (candidateIndex < 0 || candidateIndex >= discontinuities.length) {
-      logCandidate(label);
-      return;
-    }
     logCandidate(label);
+    if (!manifestCaptured || discontinuities.length === 0) return;
+    if (candidateIndex < 0 || candidateIndex >= discontinuities.length) return;
     try {
       const seekResult = await paneView.webContents.executeJavaScript(SEEK_SCRIPT(discontinuities[candidateIndex]));
       console.log('calibrate: seek result:', seekResult);
@@ -199,9 +209,9 @@ function createWindow() {
       const { requestId, request, responseStatusCode } = params;
       const isMaster = /\/index\.m3u8/i.test(request.url);
 
-      if (discontinuities.length > 0 || isMaster || attempts >= MAX_ATTEMPTS) {
+      if (manifestCaptured || isMaster || attempts >= MAX_ATTEMPTS) {
         debug.sendCommand('Fetch.continueResponse', { requestId }).catch(() => {});
-        if (discontinuities.length > 0) debug.sendCommand('Fetch.disable').catch(() => {});
+        if (manifestCaptured) debug.sendCommand('Fetch.disable').catch(() => {});
         return;
       }
 
@@ -221,6 +231,14 @@ function createWindow() {
           const parsed = parseDiscontinuities(content);
           discontinuities = parsed.discontinuities;
           totalDuration = parsed.total;
+          manifestCaptured = true;
+          if (discontinuities.length === 0) {
+            console.log(
+              `variant manifest captured: total ${fmtTime(totalDuration)}, 0 discontinuities — ` +
+                'skip-to-2nd-half not supported for this broadcast (known v1 limitation).'
+            );
+            return;
+          }
           candidateIndex = guessSecondHalfIndex(discontinuities, totalDuration);
           console.log(
             `variant manifest captured: ${discontinuities.length} discontinuities, ` +
@@ -242,8 +260,15 @@ function createWindow() {
   // Cmd+Shift+]: step to the NEXT discontinuity and seek there.
   // Cmd+Shift+[: step to the PREVIOUS discontinuity and seek there.
   globalShortcut.register('CommandOrControl+Shift+3', () => {
+    if (!manifestCaptured) {
+      console.log('calibrate: no manifest captured yet — is a game playing?');
+      return;
+    }
     if (discontinuities.length === 0) {
-      console.log('calibrate: no manifest captured yet');
+      console.log(
+        'calibrate: this broadcast has no #EXT-X-DISCONTINUITY markers — ' +
+          'skip-to-2nd-half is not supported for this content (known v1 limitation).'
+      );
       return;
     }
     console.log(`calibrate: ${discontinuities.length} discontinuities, total ${fmtTime(totalDuration)}`);
