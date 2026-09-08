@@ -10,6 +10,11 @@ contextBridge.exposeInMainWorld('courtside', {
   onFocusChanged: (callback) => {
     ipcRenderer.on('focus-changed', (_event, payload) => callback(payload));
   },
+  onPaneSkipState: (callback) => {
+    ipcRenderer.on('pane-skip-state', (_event, payload) => callback(payload));
+  },
   focusPane: (index) => ipcRenderer.send('focus-pane', index),
   retryPane: (index) => ipcRenderer.send('retry-pane', index),
+  jumpToQuarter: (index, quarter) => ipcRenderer.send('jump-to-quarter', { index, quarter }),
+  nudgeQuarter: (index, direction) => ipcRenderer.send('nudge-quarter', { index, direction }),
 });
