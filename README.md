@@ -114,6 +114,10 @@ Problem: jump the focused pane's video to the start of a specific quarter/period
 
   **Broader product vision captured for later phases** (not yet built): per-pane "add another game" (grow the grid to a max of 4), a solo-focus/fullscreen mode per pane (other panes keep playing muted in the background for instant return), and a home/schedule page listing all live games across the user's subscriptions that deep-links directly into the right pane+service when clicked — the last one needs a new "which subscription carries this game" routing layer beyond what's in the original plan doc.
 
+  **Resizable divider added (2026-09-08).** Drag the thin bar between the two panes to change the split (e.g. League Pass at 2/3 width instead of a fixed 50/50) — clamped to 20%-80% so neither pane can be squeezed to nothing. The ratio is tracked in the renderer for the divider's own live drag feedback and mirrored to the main process (`set-split-ratio` IPC) so the native `WebContentsView` bounds actually match. Only meaningful for exactly 2 panes right now — `layoutPanes()` falls back to equal division otherwise; a per-row/column ratio system for the future 4-up grid doesn't exist yet.
+
+  **Second pane swapped from YouTube to FIFA+ for DRM testing (2026-09-08).** YouTube was a fine placeholder for pure grid/focus mechanics but isn't DRM-decoded, so it couldn't validate concurrent DRM decode at all. [FIFA+](https://www.fifa.com/fifaplus/en/) is free, globally available (no geo-block issues), and is real DRM-protected sports content — confirmed loading correctly in the second pane alongside League Pass. (Note: the initial guess at its URL, `plus.fifa.com`, doesn't resolve — the real one is `www.fifa.com/fifaplus/en/`.) Still a placeholder pending the real second service (Hot Next TV), but a meaningfully better one than YouTube for what Phase 2 actually needs to validate next: real concurrent multi-DRM resource usage.
+
 ### Build & test workflow
 
 ```bash

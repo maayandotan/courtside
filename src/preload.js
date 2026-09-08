@@ -17,4 +17,5 @@ contextBridge.exposeInMainWorld('courtside', {
   retryPane: (index) => ipcRenderer.send('retry-pane', index),
   jumpToQuarter: (index, quarter) => ipcRenderer.send('jump-to-quarter', { index, quarter }),
   nudgeQuarter: (index, direction) => ipcRenderer.send('nudge-quarter', { index, direction }),
+  setSplitRatio: (ratio) => ipcRenderer.send('set-split-ratio', ratio),
 });
