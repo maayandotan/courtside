@@ -435,7 +435,7 @@ function createWindow() {
   // what's in a pane.
   const paneConfigs = [
     { url: 'https://www.nba.com/watch', label: 'League Pass', skipCapable: true },
-    { url: 'https://www.fifa.com/fifaplus/en/', label: 'FIFA+ (test)', skipCapable: false },
+    { url: 'https://www.dazn.com', label: 'DAZN (test)', skipCapable: false },
   ];
 
   let splitRatio = 0.5;
