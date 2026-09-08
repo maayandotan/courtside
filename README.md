@@ -104,6 +104,12 @@ Problem: jump the focused pane's video to the start of a specific quarter/period
 
 - **Phase 1: complete.** Electron scaffold (`WebContentsView`) loads NBA League Pass. DRM confirmed working end-to-end in a VMP-signed, packaged build. App is ad-hoc code-signed (no paid Apple Developer ID yet — fine for local personal use; only needed if distributing to other machines). Custom app icon. Shell UI has a real loading skeleton and error/retry state instead of a blank Chromium load screen, plus the 2px accent-border "focused pane" framing from the design doc (the single pane is implicitly focused for now).
 
+- **Phase 2: 2-pane grid + focus-switching — core mechanics working.** Restructured the single-pane shell into a generic `panes` array (`createPane`/`layoutPanes` in `src/main.js`) laid out as an equal-width row (extending to a 2x2 4-up grid later is just changing `cols`). Each pane gets its own clickable label bar (rendered by the shell's own HTML, not the native view) instead of intercepting clicks on the video itself — simpler than a click-passthrough overlay, and a reasonable v1 UX (click a pane's label to focus it, matching how many multi-cam viewers work). Confirmed live: clicking a label switches the accent-border focus indicator, audio correctly follows focus (only the focused pane has sound, verified switching back and forth), and neither pane reloads or restarts on a focus switch — sessions genuinely stay alive in the background, satisfying the doc's §3.2 requirement that focus-switching is a UI-level state change, not a re-initialization.
+
+  Second pane is YouTube for now, not the real second service — tested this way specifically because the user was between subscriptions (Yes STING → Hot Next TV) the day this was built. The grid/focus code itself is agnostic to what's actually in a pane, so swapping in the real second service is just changing a URL in `paneConfigs`. Skip-to-quarter (`skip: skipCapable ? createSkipEngine(view) : null`) is scoped per-pane and only wired to the League Pass pane; hotkeys now act on whichever pane is currently focused, not a hardcoded one.
+
+  **Not yet done:** resource-usage validation with two *real* concurrent DRM streams (today's test only had one DRM pane; YouTube isn't DRM-decoded the same way) — revisit once the second real subscription is active. Also not yet built: the 4-up grid, and hide-scores toggle (Phase 4).
+
 ### Build & test workflow
 
 ```bash
