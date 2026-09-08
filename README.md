@@ -110,6 +110,10 @@ Problem: jump the focused pane's video to the start of a specific quarter/period
 
   **Not yet done:** resource-usage validation with two *real* concurrent DRM streams (today's test only had one DRM pane; YouTube isn't DRM-decoded the same way) — revisit once the second real subscription is active. Also not yet built: the 4-up grid, and hide-scores toggle (Phase 4).
 
+  **Real quarter-skip UI added (2026-09-08).** The skip-to-quarter feature now has actual buttons on each skip-capable pane (Q1/Q2/Q3/Q4 + `‹`/`›` nudge), not just dev hotkeys — replacing/supplementing `Cmd+Shift+1-4` and `Cmd+Shift+Left/Right`, which still work too (act on whichever pane is focused). Buttons stay disabled until the manifest is confirmed to be a finished VOD (`#EXT-X-ENDLIST`/`#EXT-X-PLAYLIST-TYPE:VOD`) with usable discontinuity data — skipping to a quarter that hasn't happened yet on a still-live game is meaningless, so they never activate for a live broadcast. Confirmed live: buttons enable correctly once a VOD's manifest is captured, and clicking them seeks correctly (Q3 accurate, Q1/Q2/Q4 imprecise as already documented above — the nudge buttons correct that, also confirmed working from the UI).
+
+  **Broader product vision captured for later phases** (not yet built): per-pane "add another game" (grow the grid to a max of 4), a solo-focus/fullscreen mode per pane (other panes keep playing muted in the background for instant return), and a home/schedule page listing all live games across the user's subscriptions that deep-links directly into the right pane+service when clicked — the last one needs a new "which subscription carries this game" routing layer beyond what's in the original plan doc.
+
 ### Build & test workflow
 
 ```bash

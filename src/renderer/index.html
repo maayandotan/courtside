@@ -55,6 +55,33 @@
   .pane-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
   .pane-cell.focused .pane-dot { background: var(--accent); }
 
+  .pane-controls {
+    height: 32px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 8px;
+    background: var(--header-bg);
+    border-left: 2px solid transparent;
+    border-right: 2px solid transparent;
+  }
+  .pane-cell.focused .pane-controls { border-color: var(--accent); }
+  .pane-controls button {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: none;
+    background: #23262e;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .pane-controls button:hover:not(:disabled) { background: var(--accent); }
+  .pane-controls button:disabled { color: var(--muted); cursor: not-allowed; opacity: 0.5; }
+  .pane-controls .nudge { margin-left: auto; }
+  .pane-controls .skip-status { font-size: 11px; color: var(--muted); margin-left: auto; }
+
   .pane-content { position: relative; flex: 1 1 auto; }
   .skeleton, .error-state {
     position: absolute;
@@ -105,15 +132,34 @@
   <script>
     const grid = document.getElementById('grid');
     const cells = new Map();
+    const skipCapableByIndex = new Map();
 
-    function buildPaneCell(index, label) {
+    function buildPaneCell(index, label, skipCapable) {
+      skipCapableByIndex.set(index, skipCapable);
+
       const cell = document.createElement('div');
       cell.className = 'pane-cell';
+
+      const controlsHtml = skipCapable
+        ? `
+          <div class="pane-controls">
+            <button data-quarter="1" disabled>Q1</button>
+            <button data-quarter="2" disabled>Q2</button>
+            <button data-quarter="3" disabled>Q3</button>
+            <button data-quarter="4" disabled>Q4</button>
+            <span class="skip-status nudge">loading&hellip;</span>
+            <button class="nudge-prev" disabled>&lsaquo;</button>
+            <button class="nudge-next" disabled>&rsaquo;</button>
+          </div>
+        `
+        : `<div class="pane-controls"></div>`;
+
       cell.innerHTML = `
         <div class="pane-label">
           <span class="pane-dot"></span>
           <span>${label}</span>
         </div>
+        ${controlsHtml}
         <div class="pane-content">
           <div class="skeleton">
             <div class="skeleton-bar"></div>
@@ -134,14 +180,27 @@
       cell.querySelector('.retry-btn').addEventListener('click', () => {
         window.courtside.retryPane(index);
       });
+      if (skipCapable) {
+        cell.querySelectorAll('.pane-controls button[data-quarter]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            window.courtside.jumpToQuarter(index, Number(btn.dataset.quarter));
+          });
+        });
+        cell.querySelector('.nudge-prev').addEventListener('click', () => {
+          window.courtside.nudgeQuarter(index, 'prev');
+        });
+        cell.querySelector('.nudge-next').addEventListener('click', () => {
+          window.courtside.nudgeQuarter(index, 'next');
+        });
+      }
       return cell;
     }
 
     window.courtside.onPanesConfig((panes) => {
       grid.innerHTML = '';
       cells.clear();
-      panes.forEach(({ index, label }) => {
-        const cell = buildPaneCell(index, label);
+      panes.forEach(({ index, label, skipCapable }) => {
+        const cell = buildPaneCell(index, label, skipCapable);
         grid.appendChild(cell);
         cells.set(index, cell);
       });
@@ -162,6 +221,22 @@
       cells.forEach((cell, i) => {
         cell.classList.toggle('focused', i === index);
       });
+    });
+
+    // Quarter/nudge buttons are only enabled once the focused pane's
+    // manifest is captured AND confirmed to be a VOD with usable
+    // discontinuity data — never for a still-live game (skipping to a
+    // quarter that hasn't happened yet is meaningless), matching the
+    // v1 scope decision that Q2/Q4 are a coarse hint requiring the
+    // nudge buttons, not a guaranteed-precise jump.
+    window.courtside.onPaneSkipState(({ index, ready, reason }) => {
+      const cell = cells.get(index);
+      if (!cell || !skipCapableByIndex.get(index)) return;
+      cell.querySelectorAll('.pane-controls button').forEach((btn) => {
+        btn.disabled = !ready;
+      });
+      const status = cell.querySelector('.skip-status');
+      if (status) status.textContent = ready ? '' : reason || 'loading…';
     });
   </script>
 </body>
