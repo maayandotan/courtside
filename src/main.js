@@ -3,6 +3,7 @@ const path = require('path');
 const { app, components, globalShortcut, ipcMain, BrowserWindow, WebContentsView } = require('electron');
 
 const HEADER_HEIGHT = 56;
+const LABEL_HEIGHT = 32;
 const PANE_MARGIN = 2;
 
 // Parses an HLS media playlist into the VOD-timeline offset of every
@@ -169,91 +170,51 @@ const SEEK_SCRIPT = (targetSeconds) => `
   })()
 `;
 
-function createWindow() {
-  const win = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    backgroundColor: '#1d63ff',
-    icon: path.join(__dirname, '..', 'build', 'icon.icns'),
-    webPreferences: {
-      contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js'),
-    },
-  });
-
-  win.loadFile('src/renderer/index.html');
-
-  const paneView = new WebContentsView();
-  win.contentView.addChildView(paneView);
-
-  let paneReady = false;
-
-  const hidePane = () => paneView.setBounds({ x: 0, y: 0, width: 0, height: 0 });
-
-  const showPane = () => {
-    const { width, height } = win.getContentBounds();
-    paneView.setBounds({
-      x: PANE_MARGIN,
-      y: HEADER_HEIGHT + PANE_MARGIN,
-      width: width - PANE_MARGIN * 2,
-      height: height - HEADER_HEIGHT - PANE_MARGIN * 2,
-    });
+// Encapsulates the skip-to-quarter feature's manifest-capture + seek
+// state and logic for one pane. Only meaningful for services delivered
+// as HLS with ad-stitch discontinuity markers (confirmed for League
+// Pass) — not attached to panes where skipCapable is false.
+function createSkipEngine(view) {
+  const debug = view.webContents.debugger;
+  const state = {
+    manifestCaptured: false,
+    discontinuities: [],
+    totalDuration: 0,
+    candidateIndex: -1,
+    attempts: 0,
   };
-
-  const sendStatus = (status) => win.webContents.send('pane-status', status);
-
-  paneView.webContents.on('did-start-loading', () => sendStatus({ state: 'loading' }));
-
-  paneView.webContents.on('did-finish-load', () => {
-    paneReady = true;
-    showPane();
-    sendStatus({ state: 'ready' });
-  });
-
-  // Watch the focused pane's own network traffic for its HLS media
-  // playlist. This isn't DRM-protected (only the segments it references
-  // are), but the CDN's anti-scraping checks reject a replayed fetch —
-  // so instead we intercept the real in-flight request/response via CDP
-  // Fetch domain and read the body Chromium already has, then let the
-  // response continue untouched.
-  const debug = paneView.webContents.debugger;
-  let manifestCaptured = false;
-  let discontinuities = [];
-  let totalDuration = 0;
-  let candidateIndex = -1;
-  let attempts = 0;
   const MAX_ATTEMPTS = 30;
 
   const logCandidate = (label) => {
-    if (!manifestCaptured) {
+    if (!state.manifestCaptured) {
       console.log('calibrate: no manifest captured yet — is a game playing?');
       return;
     }
-    if (discontinuities.length === 0) {
+    if (state.discontinuities.length === 0) {
       console.log(
         'calibrate: this broadcast has no #EXT-X-DISCONTINUITY markers — ' +
           'skip-to-quarter is not supported for this content (known v1 limitation, e.g. seen on a 2026 Finals game).'
       );
       return;
     }
-    if (candidateIndex < 0 || candidateIndex >= discontinuities.length) {
-      console.log(`calibrate: index ${candidateIndex} out of range (0..${discontinuities.length - 1})`);
+    if (state.candidateIndex < 0 || state.candidateIndex >= state.discontinuities.length) {
+      console.log(`calibrate: index ${state.candidateIndex} out of range (0..${state.discontinuities.length - 1})`);
       return;
     }
-    const t = discontinuities[candidateIndex];
-    const prev = candidateIndex > 0 ? discontinuities[candidateIndex - 1] : 0;
+    const t = state.discontinuities[state.candidateIndex];
+    const prev = state.candidateIndex > 0 ? state.discontinuities[state.candidateIndex - 1] : 0;
     console.log(
-      `calibrate: [${label}] index ${candidateIndex}/${discontinuities.length - 1}, ` +
+      `calibrate: [${label}] index ${state.candidateIndex}/${state.discontinuities.length - 1}, ` +
         `time ${fmtTime(t)} (${t.toFixed(1)}s), gap-before ${(t - prev).toFixed(1)}s`
     );
   };
 
   const seekToCandidate = async (label) => {
     logCandidate(label);
-    if (!manifestCaptured || discontinuities.length === 0) return;
-    if (candidateIndex < 0 || candidateIndex >= discontinuities.length) return;
+    if (!state.manifestCaptured || state.discontinuities.length === 0) return;
+    if (state.candidateIndex < 0 || state.candidateIndex >= state.discontinuities.length) return;
     try {
-      const seekResult = await paneView.webContents.executeJavaScript(SEEK_SCRIPT(discontinuities[candidateIndex]));
+      const seekResult = await view.webContents.executeJavaScript(SEEK_SCRIPT(state.discontinuities[state.candidateIndex]));
       console.log('calibrate: seek result:', seekResult);
     } catch (err) {
       console.error('calibrate: seek failed:', err);
@@ -270,9 +231,9 @@ function createWindow() {
       const { requestId, request, responseStatusCode } = params;
       const isMaster = /\/index\.m3u8/i.test(request.url);
 
-      if (manifestCaptured || isMaster || attempts >= MAX_ATTEMPTS) {
+      if (state.manifestCaptured || isMaster || state.attempts >= MAX_ATTEMPTS) {
         debug.sendCommand('Fetch.continueResponse', { requestId }).catch(() => {});
-        if (manifestCaptured) debug.sendCommand('Fetch.disable').catch(() => {});
+        if (state.manifestCaptured) debug.sendCommand('Fetch.disable').catch(() => {});
         return;
       }
 
@@ -282,26 +243,25 @@ function createWindow() {
         return;
       }
 
-      attempts += 1;
+      state.attempts += 1;
       debug
         .sendCommand('Fetch.getResponseBody', { requestId })
         .then((body) => {
           const content = body.base64Encoded ? Buffer.from(body.body, 'base64').toString('utf-8') : body.body;
           if (content.length === 0) return; // keep watching
-          fs.writeFileSync(path.join(app.getPath('desktop'), 'courtside_variant_debug.m3u8'), content);
           const parsed = parseDiscontinuities(content);
-          discontinuities = parsed.discontinuities;
-          totalDuration = parsed.total;
-          manifestCaptured = true;
-          if (discontinuities.length === 0) {
+          state.discontinuities = parsed.discontinuities;
+          state.totalDuration = parsed.total;
+          state.manifestCaptured = true;
+          if (state.discontinuities.length === 0) {
             console.log(
-              `variant manifest captured: total ${fmtTime(totalDuration)}, 0 discontinuities — ` +
+              `variant manifest captured: total ${fmtTime(state.totalDuration)}, 0 discontinuities — ` +
                 'skip-to-quarter not supported for this broadcast (known v1 limitation).'
             );
             return;
           }
           console.log(
-            `variant manifest captured: ${discontinuities.length} discontinuities, total ${fmtTime(totalDuration)}. ` +
+            `variant manifest captured: ${state.discontinuities.length} discontinuities, total ${fmtTime(state.totalDuration)}. ` +
               'Press Cmd+Shift+1/2/3/4 to jump to a quarter start.'
           );
         })
@@ -314,7 +274,166 @@ function createWindow() {
     console.error('debugger attach failed:', e.message);
   }
 
-  // --- Calibration hotkeys ---
+  return {
+    dumpTable() {
+      if (!state.manifestCaptured) {
+        console.log('calibrate: no manifest captured yet — is a game playing?');
+        return;
+      }
+      if (state.discontinuities.length === 0) {
+        console.log(
+          'calibrate: this broadcast has no #EXT-X-DISCONTINUITY markers — ' +
+            'skip-to-quarter is not supported for this content (known v1 limitation).'
+        );
+        return;
+      }
+      console.log(`calibrate: ${state.discontinuities.length} discontinuities, total ${fmtTime(state.totalDuration)}`);
+      let prev = 0;
+      state.discontinuities.forEach((d, i) => {
+        console.log(`  #${i}: ${fmtTime(d)} (${d.toFixed(1)}s)  gap-before ${(d - prev).toFixed(1)}s`);
+        prev = d;
+      });
+    },
+    jumpToQuarter(quarter) {
+      if (!state.manifestCaptured || state.discontinuities.length === 0) {
+        logCandidate(`Q${quarter} guess`);
+        return;
+      }
+      state.candidateIndex = guessQuarterStartIndex(state.discontinuities, state.totalDuration, quarter);
+      seekToCandidate(`Q${quarter} guess`);
+    },
+    stepNext() {
+      state.candidateIndex = Math.min(state.candidateIndex + 1, state.discontinuities.length - 1);
+      seekToCandidate('next');
+    },
+    stepPrev() {
+      state.candidateIndex = Math.max(state.candidateIndex - 1, 0);
+      seekToCandidate('prev');
+    },
+  };
+}
+
+// Lays out every pane in an equal-width row (2-up for now; extending to a
+// 2x2 4-up grid later is just changing `cols`). Not-yet-ready panes are
+// collapsed to zero size so the shell's own loading/error UI shows
+// through instead of a blank native view.
+function layoutPanes(win, panes) {
+  const { width, height } = win.getContentBounds();
+  const n = panes.length;
+  const cols = n <= 1 ? 1 : 2;
+  const rows = Math.ceil(n / cols);
+  const cellWidth = width / cols;
+  const cellHeight = (height - HEADER_HEIGHT) / rows;
+
+  panes.forEach((pane, i) => {
+    if (!pane.ready) {
+      pane.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+      return;
+    }
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const x = col * cellWidth + PANE_MARGIN;
+    const y = HEADER_HEIGHT + row * cellHeight + LABEL_HEIGHT + PANE_MARGIN;
+    const w = cellWidth - PANE_MARGIN * 2;
+    const h = cellHeight - LABEL_HEIGHT - PANE_MARGIN * 2;
+    pane.view.setBounds({
+      x: Math.round(x),
+      y: Math.round(y),
+      width: Math.max(0, Math.round(w)),
+      height: Math.max(0, Math.round(h)),
+    });
+  });
+}
+
+function createPane(win, index, { url, skipCapable }, layoutAll) {
+  const view = new WebContentsView();
+  win.contentView.addChildView(view);
+
+  const pane = {
+    index,
+    url,
+    view,
+    ready: false,
+    skip: skipCapable ? createSkipEngine(view) : null,
+  };
+
+  const sendStatus = (status) => win.webContents.send('pane-status', { index, ...status });
+
+  view.webContents.on('did-start-loading', () => sendStatus({ state: 'loading' }));
+  view.webContents.on('did-finish-load', () => {
+    pane.ready = true;
+    sendStatus({ state: 'ready' });
+    layoutAll();
+  });
+  view.webContents.on('did-fail-load', (_event, _code, description) => {
+    pane.ready = false;
+    view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    sendStatus({ state: 'error', message: description || 'Stream failed to load.' });
+  });
+
+  view.webContents.loadURL(url);
+  return pane;
+}
+
+function createWindow() {
+  const win = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    backgroundColor: '#1d63ff',
+    icon: path.join(__dirname, '..', 'build', 'icon.icns'),
+    webPreferences: {
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js'),
+    },
+  });
+
+  win.loadFile('src/renderer/index.html');
+
+  // Second pane is YouTube as a placeholder — testing the grid/focus
+  // mechanics while between real second-service subscriptions (Yes
+  // STING -> Hot Next TV). Swap in the real second service once that
+  // subscription is active; the grid/focus code itself doesn't care
+  // what's in a pane.
+  const paneConfigs = [
+    { url: 'https://www.nba.com/watch', label: 'League Pass', skipCapable: true },
+    { url: 'https://www.youtube.com', label: 'YouTube (placeholder)', skipCapable: false },
+  ];
+
+  const panes = [];
+  const layoutAll = () => layoutPanes(win, panes);
+  paneConfigs.forEach((cfg, index) => {
+    panes.push(createPane(win, index, cfg, layoutAll));
+  });
+
+  let focusedIndex = 0;
+  const setFocus = (index) => {
+    if (index < 0 || index >= panes.length) return;
+    focusedIndex = index;
+    panes.forEach((pane, i) => pane.view.webContents.setAudioMuted(i !== index));
+    win.webContents.send('focus-changed', { index });
+  };
+
+  win.webContents.on('did-finish-load', () => {
+    win.webContents.send(
+      'panes-config',
+      paneConfigs.map((cfg, index) => ({ index, label: cfg.label }))
+    );
+    setFocus(0);
+  });
+
+  ipcMain.on('focus-pane', (_event, index) => setFocus(index));
+  ipcMain.on('retry-pane', (_event, index) => {
+    const pane = panes[index];
+    if (!pane) return;
+    pane.ready = false;
+    pane.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    win.webContents.send('pane-status', { index, state: 'loading' });
+    pane.view.webContents.reload();
+  });
+
+  win.on('resize', layoutAll);
+
+  // --- Calibration hotkeys (operate on the currently FOCUSED pane) ---
   // Cmd+Shift+L: print the full discontinuity/gap table.
   // Cmd+Shift+1/2/3/4: jump to that quarter's guessed start.
   // Cmd+Shift+Right: step to the NEXT discontinuity and seek there.
@@ -322,24 +441,18 @@ function createWindow() {
   // (Not Cmd+Shift+[/]: Cmd+Shift+[ silently did nothing in testing,
   // almost certainly colliding with macOS's own "previous Space"
   // Mission Control shortcut before it ever reached the app.)
+  const focusedSkip = () => {
+    const pane = panes[focusedIndex];
+    if (!pane || !pane.skip) {
+      console.log(`pane ${focusedIndex} doesn't support skip-to-quarter (not an HLS/manifest-based service).`);
+      return null;
+    }
+    return pane.skip;
+  };
+
   globalShortcut.register('CommandOrControl+Shift+L', () => {
-    if (!manifestCaptured) {
-      console.log('calibrate: no manifest captured yet — is a game playing?');
-      return;
-    }
-    if (discontinuities.length === 0) {
-      console.log(
-        'calibrate: this broadcast has no #EXT-X-DISCONTINUITY markers — ' +
-          'skip-to-quarter is not supported for this content (known v1 limitation).'
-      );
-      return;
-    }
-    console.log(`calibrate: ${discontinuities.length} discontinuities, total ${fmtTime(totalDuration)}`);
-    let prev = 0;
-    discontinuities.forEach((d, i) => {
-      console.log(`  #${i}: ${fmtTime(d)} (${d.toFixed(1)}s)  gap-before ${(d - prev).toFixed(1)}s`);
-      prev = d;
-    });
+    const skip = focusedSkip();
+    if (skip) skip.dumpTable();
   });
 
   // Q3 lands reliably (validated across many real games — see README).
@@ -351,42 +464,19 @@ function createWindow() {
   // before trusting a Q2/Q4 jump.
   [1, 2, 3, 4].forEach((quarter) => {
     globalShortcut.register(`CommandOrControl+Shift+${quarter}`, () => {
-      if (!manifestCaptured || discontinuities.length === 0) {
-        logCandidate(`Q${quarter} guess`);
-        return;
-      }
-      candidateIndex = guessQuarterStartIndex(discontinuities, totalDuration, quarter);
-      seekToCandidate(`Q${quarter} guess`);
+      const skip = focusedSkip();
+      if (skip) skip.jumpToQuarter(quarter);
     });
   });
 
   globalShortcut.register('CommandOrControl+Shift+Right', () => {
-    candidateIndex = Math.min(candidateIndex + 1, discontinuities.length - 1);
-    seekToCandidate('next');
+    const skip = focusedSkip();
+    if (skip) skip.stepNext();
   });
   globalShortcut.register('CommandOrControl+Shift+Left', () => {
-    candidateIndex = Math.max(candidateIndex - 1, 0);
-    seekToCandidate('prev');
+    const skip = focusedSkip();
+    if (skip) skip.stepPrev();
   });
-
-  paneView.webContents.on('did-fail-load', (_event, _code, description) => {
-    paneReady = false;
-    hidePane();
-    sendStatus({ state: 'error', message: description || 'Stream failed to load.' });
-  });
-
-  ipcMain.on('retry-pane', () => {
-    hidePane();
-    sendStatus({ state: 'loading' });
-    paneView.webContents.reload();
-  });
-
-  win.on('resize', () => {
-    if (paneReady) showPane();
-  });
-
-  hidePane();
-  paneView.webContents.loadURL('https://www.nba.com/watch');
 }
 
 app.whenReady().then(async () => {
