@@ -4,24 +4,32 @@ const { app, components, globalShortcut, ipcMain, BrowserWindow, WebContentsView
 
 const HEADER_HEIGHT = 56;
 const LABEL_HEIGHT = 32;
+const CONTROLS_HEIGHT = 32;
+const PANE_HEADER_HEIGHT = LABEL_HEIGHT + CONTROLS_HEIGHT;
 const PANE_MARGIN = 2;
 
 // Parses an HLS media playlist into the VOD-timeline offset of every
 // #EXT-X-DISCONTINUITY marker (broadcast structural boundaries — timeouts,
-// period transitions), plus total runtime.
+// period transitions), plus total runtime, plus whether this is a VOD
+// (finished, #EXT-X-ENDLIST present) vs. a still-growing live playlist.
+// Skip-to-quarter only makes sense for VOD — jumping to "Q3" on a live
+// broadcast that hasn't reached Q3 yet is meaningless.
 function parseDiscontinuities(manifestText) {
   const lines = manifestText.split('\n');
   let elapsed = 0;
   const discontinuities = [];
+  let isVod = false;
   for (const rawLine of lines) {
     const line = rawLine.trim();
     if (line.startsWith('#EXTINF:')) {
       elapsed += parseFloat(line.slice('#EXTINF:'.length));
     } else if (line === '#EXT-X-DISCONTINUITY') {
       discontinuities.push(elapsed);
+    } else if (line === '#EXT-X-ENDLIST' || line === '#EXT-X-PLAYLIST-TYPE:VOD') {
+      isVod = true;
     }
   }
-  return { discontinuities, total: elapsed };
+  return { discontinuities, total: elapsed, isVod };
 }
 
 // Guesses which discontinuity marks the start of a given quarter (1-4),
@@ -174,16 +182,18 @@ const SEEK_SCRIPT = (targetSeconds) => `
 // state and logic for one pane. Only meaningful for services delivered
 // as HLS with ad-stitch discontinuity markers (confirmed for League
 // Pass) — not attached to panes where skipCapable is false.
-function createSkipEngine(view) {
+function createSkipEngine(view, onManifestState) {
   const debug = view.webContents.debugger;
   const state = {
     manifestCaptured: false,
     discontinuities: [],
     totalDuration: 0,
+    isVod: false,
     candidateIndex: -1,
     attempts: 0,
   };
   const MAX_ATTEMPTS = 30;
+  const notify = onManifestState || (() => {});
 
   const logCandidate = (label) => {
     if (!state.manifestCaptured) {
@@ -252,18 +262,27 @@ function createSkipEngine(view) {
           const parsed = parseDiscontinuities(content);
           state.discontinuities = parsed.discontinuities;
           state.totalDuration = parsed.total;
+          state.isVod = parsed.isVod;
           state.manifestCaptured = true;
+
+          if (!state.isVod) {
+            console.log('variant manifest captured: still live (no #EXT-X-ENDLIST) — skip-to-quarter not available yet.');
+            notify({ ready: false, reason: 'Not available for a live game.' });
+            return;
+          }
           if (state.discontinuities.length === 0) {
             console.log(
               `variant manifest captured: total ${fmtTime(state.totalDuration)}, 0 discontinuities — ` +
                 'skip-to-quarter not supported for this broadcast (known v1 limitation).'
             );
+            notify({ ready: false, reason: 'Not supported for this broadcast.' });
             return;
           }
           console.log(
             `variant manifest captured: ${state.discontinuities.length} discontinuities, total ${fmtTime(state.totalDuration)}. ` +
               'Press Cmd+Shift+1/2/3/4 to jump to a quarter start.'
           );
+          notify({ ready: true });
         })
         .catch((e) => console.error('Fetch.getResponseBody failed:', e.message))
         .finally(() => {
@@ -333,9 +352,9 @@ function layoutPanes(win, panes) {
     const col = i % cols;
     const row = Math.floor(i / cols);
     const x = col * cellWidth + PANE_MARGIN;
-    const y = HEADER_HEIGHT + row * cellHeight + LABEL_HEIGHT + PANE_MARGIN;
+    const y = HEADER_HEIGHT + row * cellHeight + PANE_HEADER_HEIGHT + PANE_MARGIN;
     const w = cellWidth - PANE_MARGIN * 2;
-    const h = cellHeight - LABEL_HEIGHT - PANE_MARGIN * 2;
+    const h = cellHeight - PANE_HEADER_HEIGHT - PANE_MARGIN * 2;
     pane.view.setBounds({
       x: Math.round(x),
       y: Math.round(y),
@@ -354,7 +373,11 @@ function createPane(win, index, { url, skipCapable }, layoutAll) {
     url,
     view,
     ready: false,
-    skip: skipCapable ? createSkipEngine(view) : null,
+    skip: skipCapable
+      ? createSkipEngine(view, (manifestState) => {
+          win.webContents.send('pane-skip-state', { index, ...manifestState });
+        })
+      : null,
   };
 
   const sendStatus = (status) => win.webContents.send('pane-status', { index, ...status });
@@ -416,7 +439,7 @@ function createWindow() {
   win.webContents.on('did-finish-load', () => {
     win.webContents.send(
       'panes-config',
-      paneConfigs.map((cfg, index) => ({ index, label: cfg.label }))
+      paneConfigs.map((cfg, index) => ({ index, label: cfg.label, skipCapable: cfg.skipCapable }))
     );
     setFocus(0);
   });
@@ -429,6 +452,16 @@ function createWindow() {
     pane.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
     win.webContents.send('pane-status', { index, state: 'loading' });
     pane.view.webContents.reload();
+  });
+  ipcMain.on('jump-to-quarter', (_event, { index, quarter }) => {
+    const pane = panes[index];
+    if (pane && pane.skip) pane.skip.jumpToQuarter(quarter);
+  });
+  ipcMain.on('nudge-quarter', (_event, { index, direction }) => {
+    const pane = panes[index];
+    if (!pane || !pane.skip) return;
+    if (direction === 'next') pane.skip.stepNext();
+    else pane.skip.stepPrev();
   });
 
   win.on('resize', layoutAll);
