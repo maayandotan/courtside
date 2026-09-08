@@ -35,7 +35,14 @@
   .subtitle { font-size: 13px; color: var(--muted); margin-left: auto; }
 
   #grid { flex: 1 1 auto; display: flex; }
-  .pane-cell { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .pane-cell { flex: 1 1 0%; display: flex; flex-direction: column; min-width: 0; }
+
+  .divider {
+    flex: 0 0 6px;
+    background: var(--header-bg);
+    cursor: col-resize;
+  }
+  .divider:hover, .divider.dragging { background: var(--accent); }
 
   .pane-label {
     height: 32px;
@@ -196,6 +203,43 @@
       return cell;
     }
 
+    // Draggable divider — only meaningful for exactly 2 panes (matches
+    // main.js's layoutPanes, which only understands a splitRatio for
+    // n===2; a future 4-up grid would need per-row/column dividers).
+    let splitRatio = 0.5;
+
+    function setSplitRatio(ratio, cellA, cellB) {
+      splitRatio = Math.max(0.2, Math.min(0.8, ratio));
+      cellA.style.flex = `0 0 ${splitRatio * 100}%`;
+      cellB.style.flex = `0 0 ${(1 - splitRatio) * 100}%`;
+      window.courtside.setSplitRatio(splitRatio);
+    }
+
+    function buildDivider(cellA, cellB) {
+      const divider = document.createElement('div');
+      divider.className = 'divider';
+      let dragging = false;
+
+      const onMove = (e) => {
+        if (!dragging) return;
+        const gridRect = grid.getBoundingClientRect();
+        setSplitRatio((e.clientX - gridRect.left) / gridRect.width, cellA, cellB);
+      };
+      const onUp = () => {
+        dragging = false;
+        divider.classList.remove('dragging');
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+      };
+      divider.addEventListener('mousedown', () => {
+        dragging = true;
+        divider.classList.add('dragging');
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+      });
+      return divider;
+    }
+
     window.courtside.onPanesConfig((panes) => {
       grid.innerHTML = '';
       cells.clear();
@@ -204,6 +248,12 @@
         grid.appendChild(cell);
         cells.set(index, cell);
       });
+      if (panes.length === 2) {
+        const [cellA, cellB] = [cells.get(panes[0].index), cells.get(panes[1].index)];
+        cellA.style.flex = `0 0 ${splitRatio * 100}%`;
+        cellB.style.flex = `0 0 ${(1 - splitRatio) * 100}%`;
+        grid.insertBefore(buildDivider(cellA, cellB), cellB);
+      }
     });
 
     window.courtside.onPaneStatus(({ index, state, message }) => {
