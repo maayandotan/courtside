@@ -32,17 +32,31 @@
     background: var(--header-bg);
   }
   .wordmark { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; }
-  .badge {
-    padding: 4px 10px;
-    border-radius: 6px;
-    background: var(--accent);
-    font-size: 13px;
-    font-weight: 600;
-  }
   .subtitle { font-size: 13px; color: var(--muted); margin-left: auto; }
 
-  #content { position: relative; flex: 1 1 auto; }
-  #skeleton, #error-state {
+  #grid { flex: 1 1 auto; display: flex; }
+  .pane-cell { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+  .pane-label {
+    height: 32px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 12px;
+    background: var(--header-bg);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 2px solid transparent;
+    border-bottom: none;
+  }
+  .pane-cell.focused .pane-label { border-color: var(--accent); background: #1a2540; }
+  .pane-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
+  .pane-cell.focused .pane-dot { background: var(--accent); }
+
+  .pane-content { position: relative; flex: 1 1 auto; }
+  .skeleton, .error-state {
     position: absolute;
     inset: 2px;
     background: var(--bg);
@@ -58,64 +72,96 @@
     border-radius: 8px;
     animation: pulse 1.4s ease-in-out infinite;
   }
-  #skeleton .skeleton-bar:nth-child(1) { width: 340px; height: 20px; }
-  #skeleton .skeleton-bar:nth-child(2) { width: 520px; height: 300px; }
+  .skeleton .skeleton-bar:nth-child(1) { width: 60%; max-width: 340px; height: 20px; }
+  .skeleton .skeleton-bar:nth-child(2) { width: 80%; max-width: 520px; height: 55%; }
   @keyframes pulse {
     0%, 100% { opacity: 0.45; }
     50% { opacity: 0.9; }
   }
 
-  #error-state svg { width: 40px; height: 40px; stroke: var(--muted); }
-  #error-message { font-size: 14px; color: var(--muted); max-width: 360px; text-align: center; }
-  #retry-btn {
-    padding: 8px 18px;
+  .error-state svg { width: 32px; height: 32px; stroke: var(--muted); }
+  .error-message { font-size: 13px; color: var(--muted); max-width: 80%; text-align: center; }
+  .retry-btn {
+    padding: 6px 14px;
     border-radius: 6px;
     border: none;
     background: var(--accent);
     color: var(--text);
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
     cursor: pointer;
   }
-  #retry-btn:hover { filter: brightness(1.1); }
+  .retry-btn:hover { filter: brightness(1.1); }
 </style>
 </head>
 <body>
   <header>
-    <span class="badge">League Pass</span>
     <span class="wordmark">CourtSide</span>
-    <span class="subtitle">Phase 1 &mdash; single pane, DRM validated</span>
+    <span class="subtitle">Phase 2 &mdash; click a pane's label to focus it</span>
   </header>
 
-  <div id="content">
-    <div id="skeleton">
-      <div class="skeleton-bar"></div>
-      <div class="skeleton-bar"></div>
-    </div>
-    <div id="error-state">
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/>
-      </svg>
-      <div id="error-message">Stream failed to load.</div>
-      <button id="retry-btn">Retry</button>
-    </div>
-  </div>
+  <div id="grid"></div>
 
   <script>
-    const skeleton = document.getElementById('skeleton');
-    const errorState = document.getElementById('error-state');
-    const errorMessage = document.getElementById('error-message');
+    const grid = document.getElementById('grid');
+    const cells = new Map();
 
-    window.courtside.onPaneStatus((status) => {
-      skeleton.style.display = status.state === 'loading' ? 'flex' : 'none';
-      errorState.style.display = status.state === 'error' ? 'flex' : 'none';
-      if (status.state === 'error') {
-        errorMessage.textContent = status.message || 'Stream failed to load.';
+    function buildPaneCell(index, label) {
+      const cell = document.createElement('div');
+      cell.className = 'pane-cell';
+      cell.innerHTML = `
+        <div class="pane-label">
+          <span class="pane-dot"></span>
+          <span>${label}</span>
+        </div>
+        <div class="pane-content">
+          <div class="skeleton">
+            <div class="skeleton-bar"></div>
+            <div class="skeleton-bar"></div>
+          </div>
+          <div class="error-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/>
+            </svg>
+            <div class="error-message">Stream failed to load.</div>
+            <button class="retry-btn">Retry</button>
+          </div>
+        </div>
+      `;
+      cell.querySelector('.pane-label').addEventListener('click', () => {
+        window.courtside.focusPane(index);
+      });
+      cell.querySelector('.retry-btn').addEventListener('click', () => {
+        window.courtside.retryPane(index);
+      });
+      return cell;
+    }
+
+    window.courtside.onPanesConfig((panes) => {
+      grid.innerHTML = '';
+      cells.clear();
+      panes.forEach(({ index, label }) => {
+        const cell = buildPaneCell(index, label);
+        grid.appendChild(cell);
+        cells.set(index, cell);
+      });
+    });
+
+    window.courtside.onPaneStatus(({ index, state, message }) => {
+      const cell = cells.get(index);
+      if (!cell) return;
+      cell.querySelector('.skeleton').style.display = state === 'loading' ? 'flex' : 'none';
+      const errorEl = cell.querySelector('.error-state');
+      errorEl.style.display = state === 'error' ? 'flex' : 'none';
+      if (state === 'error') {
+        cell.querySelector('.error-message').textContent = message || 'Stream failed to load.';
       }
     });
 
-    document.getElementById('retry-btn').addEventListener('click', () => {
-      window.courtside.retryPane();
+    window.courtside.onFocusChanged(({ index }) => {
+      cells.forEach((cell, i) => {
+        cell.classList.toggle('focused', i === index);
+      });
     });
   </script>
 </body>
