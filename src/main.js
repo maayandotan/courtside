@@ -336,13 +336,19 @@ function createSkipEngine(view, onManifestState) {
 // 2x2 4-up grid later is just changing `cols`). Not-yet-ready panes are
 // collapsed to zero size so the shell's own loading/error UI shows
 // through instead of a blank native view.
-function layoutPanes(win, panes) {
+// `splitRatio` (0.2-0.8) controls how much of the total width the first
+// pane gets when there are exactly 2 panes in a single row — dragging
+// the divider in the renderer updates this live via the
+// 'set-split-ratio' IPC channel. With more than 2 panes (future 4-up
+// grid) this falls back to equal division; a per-row/column ratio
+// system for that case doesn't exist yet.
+function layoutPanes(win, panes, splitRatio) {
   const { width, height } = win.getContentBounds();
   const n = panes.length;
   const cols = n <= 1 ? 1 : 2;
   const rows = Math.ceil(n / cols);
-  const cellWidth = width / cols;
   const cellHeight = (height - HEADER_HEIGHT) / rows;
+  const useRatio = n === 2 && typeof splitRatio === 'number';
 
   panes.forEach((pane, i) => {
     if (!pane.ready) {
@@ -351,7 +357,17 @@ function layoutPanes(win, panes) {
     }
     const col = i % cols;
     const row = Math.floor(i / cols);
-    const x = col * cellWidth + PANE_MARGIN;
+    let cellX;
+    let cellWidth;
+    if (useRatio) {
+      const firstWidth = width * splitRatio;
+      cellX = col === 0 ? 0 : firstWidth;
+      cellWidth = col === 0 ? firstWidth : width - firstWidth;
+    } else {
+      cellWidth = width / cols;
+      cellX = col * cellWidth;
+    }
+    const x = cellX + PANE_MARGIN;
     const y = HEADER_HEIGHT + row * cellHeight + PANE_HEADER_HEIGHT + PANE_MARGIN;
     const w = cellWidth - PANE_MARGIN * 2;
     const h = cellHeight - PANE_HEADER_HEIGHT - PANE_MARGIN * 2;
@@ -419,11 +435,12 @@ function createWindow() {
   // what's in a pane.
   const paneConfigs = [
     { url: 'https://www.nba.com/watch', label: 'League Pass', skipCapable: true },
-    { url: 'https://www.youtube.com', label: 'YouTube (placeholder)', skipCapable: false },
+    { url: 'https://www.fifa.com/fifaplus/en/', label: 'FIFA+ (test)', skipCapable: false },
   ];
 
+  let splitRatio = 0.5;
   const panes = [];
-  const layoutAll = () => layoutPanes(win, panes);
+  const layoutAll = () => layoutPanes(win, panes, splitRatio);
   paneConfigs.forEach((cfg, index) => {
     panes.push(createPane(win, index, cfg, layoutAll));
   });
@@ -462,6 +479,10 @@ function createWindow() {
     if (!pane || !pane.skip) return;
     if (direction === 'next') pane.skip.stepNext();
     else pane.skip.stepPrev();
+  });
+  ipcMain.on('set-split-ratio', (_event, ratio) => {
+    splitRatio = Math.max(0.2, Math.min(0.8, ratio));
+    layoutAll();
   });
 
   win.on('resize', layoutAll);
