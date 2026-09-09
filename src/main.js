@@ -414,6 +414,138 @@ function createPane(win, index, { url, skipCapable }, layoutAll) {
   return pane;
 }
 
+const NBA_TEAMS = [
+  { tricode: 'ATL', name: 'Atlanta Hawks' },
+  { tricode: 'BOS', name: 'Boston Celtics' },
+  { tricode: 'BKN', name: 'Brooklyn Nets' },
+  { tricode: 'CHA', name: 'Charlotte Hornets' },
+  { tricode: 'CHI', name: 'Chicago Bulls' },
+  { tricode: 'CLE', name: 'Cleveland Cavaliers' },
+  { tricode: 'DAL', name: 'Dallas Mavericks' },
+  { tricode: 'DEN', name: 'Denver Nuggets' },
+  { tricode: 'DET', name: 'Detroit Pistons' },
+  { tricode: 'GSW', name: 'Golden State Warriors' },
+  { tricode: 'HOU', name: 'Houston Rockets' },
+  { tricode: 'IND', name: 'Indiana Pacers' },
+  { tricode: 'LAC', name: 'LA Clippers' },
+  { tricode: 'LAL', name: 'Los Angeles Lakers' },
+  { tricode: 'MEM', name: 'Memphis Grizzlies' },
+  { tricode: 'MIA', name: 'Miami Heat' },
+  { tricode: 'MIL', name: 'Milwaukee Bucks' },
+  { tricode: 'MIN', name: 'Minnesota Timberwolves' },
+  { tricode: 'NOP', name: 'New Orleans Pelicans' },
+  { tricode: 'NYK', name: 'New York Knicks' },
+  { tricode: 'OKC', name: 'Oklahoma City Thunder' },
+  { tricode: 'ORL', name: 'Orlando Magic' },
+  { tricode: 'PHI', name: 'Philadelphia 76ers' },
+  { tricode: 'PHX', name: 'Phoenix Suns' },
+  { tricode: 'POR', name: 'Portland Trail Blazers' },
+  { tricode: 'SAC', name: 'Sacramento Kings' },
+  { tricode: 'SAS', name: 'San Antonio Spurs' },
+  { tricode: 'TOR', name: 'Toronto Raptors' },
+  { tricode: 'UTA', name: 'Utah Jazz' },
+  { tricode: 'WAS', name: 'Washington Wizards' },
+];
+
+const PREFS_PATH = path.join(app.getPath('userData'), 'preferences.json');
+
+function loadPrefs() {
+  try {
+    return JSON.parse(fs.readFileSync(PREFS_PATH, 'utf-8'));
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveFavoriteTeam(tricode) {
+  const prefs = loadPrefs();
+  prefs.favoriteTeam = tricode;
+  fs.writeFileSync(PREFS_PATH, JSON.stringify(prefs, null, 2));
+}
+
+// Runs a fetch from inside a real page (not the main process) — the
+// only reliable way to reach some NBA-adjacent hosts. Main-process
+// fetch() silently hangs against stats.nba.com (likely a TLS/HTTP
+// fingerprint mismatch triggering anti-bot filtering); page-context
+// fetch uses Chromium's real network stack and works. See README.
+async function fetchViaPage(view, url, extraHeaders) {
+  return view.webContents.executeJavaScript(`
+    Promise.race([
+      fetch(${JSON.stringify(url)}, { headers: ${JSON.stringify(extraHeaders || {})} }).then((r) => r.text()),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout after 10s')), 10000)),
+    ])
+  `);
+}
+
+const STATS_HEADERS = { 'x-nba-stats-origin': 'stats', 'x-nba-stats-token': 'true', Accept: 'application/json' };
+
+// Home page data: today's games if any exist, otherwise the last
+// completed game from the most recently finished season (currently
+// hardcoded to the 2025-26 season — will need updating once a new
+// season is underway, see README known gaps).
+async function getHomeData(view) {
+  try {
+    const text = await fetchViaPage(view, 'https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json');
+    const games = JSON.parse(text)?.scoreboard?.games || [];
+    if (games.length > 0) {
+      return {
+        heading: "Today's Games",
+        games: games.map((g) => ({
+          gameId: g.gameId,
+          awayTricode: g.awayTeam.teamTricode,
+          homeTricode: g.homeTeam.teamTricode,
+          awayName: g.awayTeam.teamName,
+          homeName: g.homeTeam.teamName,
+          status: g.gameStatusText,
+        })),
+      };
+    }
+  } catch (e) {
+    console.error('getHomeData: today fetch failed:', e.message);
+  }
+
+  try {
+    const text = await fetchViaPage(
+      view,
+      'https://stats.nba.com/stats/leaguegamefinder?LeagueID=00&Season=2025-26&SeasonType=Playoffs&PlayerOrTeam=T',
+      STATS_HEADERS
+    );
+    const rs = JSON.parse(text).resultSets[0];
+    const idx = (name) => rs.headers.indexOf(name);
+    const rows = rs.rowSet;
+    if (rows.length > 0) {
+      const lastDate = rows.reduce((max, r) => (r[idx('GAME_DATE')] > max ? r[idx('GAME_DATE')] : max), rows[0][idx('GAME_DATE')]);
+      const lastGameRows = rows.filter((r) => r[idx('GAME_DATE')] === lastDate);
+      let away = null;
+      let home = null;
+      for (const r of lastGameRows) {
+        const matchup = r[idx('MATCHUP')];
+        const tricode = r[idx('TEAM_ABBREVIATION')];
+        if (matchup.includes('vs.')) home = tricode;
+        else if (matchup.includes('@')) away = tricode;
+      }
+      const teamName = (tricode) => NBA_TEAMS.find((t) => t.tricode === tricode)?.name || tricode;
+      return {
+        heading: `No games today — last game played (${lastDate})`,
+        games: [
+          {
+            gameId: lastGameRows[0][idx('GAME_ID')],
+            awayTricode: away,
+            homeTricode: home,
+            awayName: teamName(away),
+            homeName: teamName(home),
+            status: 'Final',
+          },
+        ],
+      };
+    }
+  } catch (e) {
+    console.error('getHomeData: last-game fallback failed:', e.message);
+  }
+
+  return { heading: 'No games available', games: [] };
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -434,7 +566,7 @@ function createWindow() {
   // subscription is active; the grid/focus code itself doesn't care
   // what's in a pane.
   const paneConfigs = [
-    { url: 'https://www.nba.com/watch', label: 'League Pass', skipCapable: true },
+    { url: 'https://www.nba.com/game/nyk-vs-sas-0042500405?watchFullGame', label: 'League Pass', skipCapable: true },
     {
       // A specific free replay fixture, used as the default so there's
       // always something playable without hunting through DAZN's own
@@ -448,16 +580,50 @@ function createWindow() {
 
   let splitRatio = 0.5;
   const panes = [];
-  const layoutAll = () => layoutPanes(win, panes, splitRatio);
+
+  // The panes are native WebContentsViews layered on top of the window
+  // in absolute coordinates — a completely separate layer from the
+  // renderer's own HTML/CSS. Hiding the renderer's #grid <div> does
+  // NOT hide them; the main process has to explicitly zero out their
+  // bounds itself. currentView tracks which "screen" is active so
+  // layout and audio-muting both respect it.
+  let currentView = 'home';
+
+  const hideAllPanes = () => {
+    panes.forEach((pane) => pane.view.setBounds({ x: 0, y: 0, width: 0, height: 0 }));
+  };
+
+  const layoutAll = () => {
+    if (currentView !== 'grid') {
+      hideAllPanes();
+      return;
+    }
+    layoutPanes(win, panes, splitRatio);
+  };
+
+  let focusedIndex = 0;
+  const applyAudioMuting = () => {
+    if (currentView !== 'grid') {
+      panes.forEach((pane) => pane.view.webContents.setAudioMuted(true));
+    } else {
+      panes.forEach((pane, i) => pane.view.webContents.setAudioMuted(i !== focusedIndex));
+    }
+  };
+
+  const setView = (view) => {
+    currentView = view;
+    layoutAll();
+    applyAudioMuting();
+  };
+
   paneConfigs.forEach((cfg, index) => {
     panes.push(createPane(win, index, cfg, layoutAll));
   });
 
-  let focusedIndex = 0;
   const setFocus = (index) => {
     if (index < 0 || index >= panes.length) return;
     focusedIndex = index;
-    panes.forEach((pane, i) => pane.view.webContents.setAudioMuted(i !== index));
+    applyAudioMuting();
     win.webContents.send('focus-changed', { index });
   };
 
@@ -467,7 +633,10 @@ function createWindow() {
       paneConfigs.map((cfg, index) => ({ index, label: cfg.label, skipCapable: cfg.skipCapable }))
     );
     setFocus(0);
+    setView('home');
   });
+
+  ipcMain.on('show-home', () => setView('home'));
 
   ipcMain.on('focus-pane', (_event, index) => setFocus(index));
   ipcMain.on('retry-pane', (_event, index) => {
@@ -491,6 +660,23 @@ function createWindow() {
   ipcMain.on('set-split-ratio', (_event, ratio) => {
     splitRatio = Math.max(0.2, Math.min(0.8, ratio));
     layoutAll();
+  });
+
+  ipcMain.handle('get-home-data', () => getHomeData(panes[0].view));
+  ipcMain.handle('get-teams', () => NBA_TEAMS);
+  ipcMain.handle('get-favorite-team', () => loadPrefs().favoriteTeam || null);
+  ipcMain.on('set-favorite-team', (_event, tricode) => saveFavoriteTeam(tricode));
+  ipcMain.on('open-game', (_event, { gameId, awayTricode, homeTricode }) => {
+    // Only League Pass (pane 0) understands NBA game deep links right
+    // now — the home page is NBA-specific until more real services
+    // with their own schedules are wired in (v0.5's provider work).
+    const pane = panes[0];
+    const url = `https://www.nba.com/game/${awayTricode.toLowerCase()}-vs-${homeTricode.toLowerCase()}-${gameId}?watchFullGame`;
+    pane.ready = false;
+    win.webContents.send('pane-status', { index: 0, state: 'loading' });
+    pane.view.webContents.loadURL(url);
+    setView('grid');
+    win.webContents.send('show-grid');
   });
 
   win.on('resize', layoutAll);
