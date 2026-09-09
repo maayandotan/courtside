@@ -273,6 +273,9 @@
     <div class="home-heading" id="epl-heading" style="margin-top: 32px;">Loading&hellip;</div>
     <div class="game-list" id="epl-list"></div>
 
+    <div class="home-heading" id="cl-heading" style="margin-top: 32px;">Loading&hellip;</div>
+    <div class="game-list" id="cl-list"></div>
+
     <div class="watch-selected-bar" id="watch-selected-bar">
       <button class="watch-selected-btn" id="watch-selected-btn" disabled>Watch Selected (0)</button>
     </div>
@@ -298,7 +301,8 @@
     let pendingAction = null;
 
     function gameKey(g) {
-      return g.league === 'nba' ? `nba:${g.gameId}` : `epl:${g.homeName}|${g.awayName}`;
+      if (g.league === 'nba') return `nba:${g.gameId}`;
+      return `${g.league}:${g.homeName}|${g.awayName}`;
     }
 
     let paneCount = 0;
@@ -377,11 +381,12 @@
     let favoriteTeam = null;
 
     async function loadHomeView() {
-      const [teams, savedFavorite, homeData, eplData] = await Promise.all([
+      const [teams, savedFavorite, homeData, eplData, clData] = await Promise.all([
         window.courtside.getTeams(),
         window.courtside.getFavoriteTeam(),
         window.courtside.getHomeData(),
         window.courtside.getEplHomeData(),
+        window.courtside.getClHomeData(),
       ]);
       favoriteTeam = savedFavorite;
       favoriteSelect.innerHTML = '<option value="">None</option>' +
@@ -389,6 +394,7 @@
       favoriteSelect.value = favoriteTeam || '';
       renderGames(homeData);
       renderEplMatches(eplData);
+      renderClMatches(clData);
     }
 
     favoriteSelect.addEventListener('change', () => {
@@ -416,6 +422,7 @@
         else if (selectedGames.length < 4) selectedGames.push(game);
         renderGames(lastHomeData);
         renderEplMatches(lastEplData);
+        renderClMatches(lastClData);
         updateWatchSelectedUI();
         return;
       }
@@ -449,6 +456,7 @@
       multiViewToggle.classList.toggle('on', multiViewMode);
       gameList.classList.toggle('multi-view-on', multiViewMode);
       eplList.classList.toggle('multi-view-on', multiViewMode);
+      clList.classList.toggle('multi-view-on', multiViewMode);
       updateWatchSelectedUI();
     }
     function updateWatchSelectedUI() {
@@ -464,6 +472,7 @@
       updateMultiViewUI();
       renderGames(lastHomeData);
       renderEplMatches(lastEplData);
+      renderClMatches(lastClData);
     });
     watchSelectedBtn.addEventListener('click', () => {
       if (selectedGames.length === 0) return;
@@ -545,6 +554,43 @@
         `;
         row.addEventListener('click', () => handleGameClick(game));
         eplList.appendChild(row);
+      });
+    }
+
+    // Champions League: clicking a match opens UEFA's own fixtures page
+    // for that date and scripts a click on the match's highlights
+    // thumbnail (only visible once logged into a UEFA account — the
+    // user logs in manually within the pane, same pattern as DAZN/
+    // League Pass elsewhere in this app). No score shown here either,
+    // same no-spoilers pattern as NBA/EPL.
+    const clHeading = document.getElementById('cl-heading');
+    const clList = document.getElementById('cl-list');
+    let lastClData = { heading: '', matches: [] };
+
+    function renderClMatches(clData) {
+      lastClData = clData;
+      clHeading.textContent = clData.heading;
+      clList.innerHTML = '';
+      if (clData.matches.length === 0) {
+        clList.innerHTML = '<div class="home-empty">No matches to show right now.</div>';
+        return;
+      }
+      clData.matches.forEach((match) => {
+        const game = { league: 'cl', homeName: match.homeName, awayName: match.awayName, date: match.date };
+        const isSelected = multiViewMode && selectedGames.some((s) => gameKey(s) === gameKey(game));
+        const row = document.createElement('div');
+        row.className = 'game-row' + (isSelected ? ' selected' : '');
+        row.innerHTML = `
+          <span class="select-check">${isSelected ? '✓' : ''}</span>
+          <span class="matchup">
+            <img class="team-crest" src="${match.homeCrest}" onerror="this.style.display='none'">
+            ${match.homeName} v ${match.awayName}
+            <img class="team-crest" src="${match.awayCrest}" onerror="this.style.display='none'">
+          </span>
+          <span class="status">${match.date}</span>
+        `;
+        row.addEventListener('click', () => handleGameClick(game));
+        clList.appendChild(row);
       });
     }
 
