@@ -89,7 +89,7 @@ Problem: jump the focused pane's video to the start of a specific quarter/period
 
 The phases above describe *what* to build; actual building surfaced a better *order*. Real usage revealed the app is missing a coherent skeleton — there's no home page at all right now, the grid is hardcoded to exactly 2 panes, and there's no formal way to add a service beyond editing `main.js` by hand. Rather than keep polishing one feature at a time, the plan going forward is to get a *thin, working slice* of every major flow in place first, then do a depth pass across all of them:
 
-- **v0.3 — Home/schedule page.** Browse real games, click one, it opens in a pane. Includes a favorite-team picker (persisted), but *not* wired into any scoring yet — that's v0.7.
+- **v0.3 — Home/schedule page. Done (2026-09-09).** Browse real games, click one, it opens in a pane. Includes a favorite-team picker (persisted), but *not* wired into any scoring yet — that's v0.7. See the Status section below for the real data sources and a genuine architecture bug this surfaced.
 - **v0.4 — Dynamic grid.** 1–4 panes with add/remove, plus a solo-focus/fullscreen toggle per pane (other panes keep playing muted in the background).
 - **v0.5 — Formal Provider interface.** Turn the ad-hoc `skipCapable` flag into an explicit adapter/capability-detection pattern (open/play/pause/seek/getCurrentTime/getGameState, with per-service capability flags) *before* wiring in more services, not after.
 - **v0.6 — Hide-scores toggle.** Small, self-contained; rounds out the spoiler-safety story alongside skip-to-quarter.
@@ -182,3 +182,15 @@ EVS account credentials/tokens live in `~/.config/evs`, outside the repo. `.evs-
   Also worth noting: fetching `stats.nba.com` only worked via a page-context `fetch()` (Chromium's real network stack) — a **main-process** `fetch()` call silently hung indefinitely, almost certainly because Node's HTTP client has a different TLS/HTTP fingerprint than a real browser and got caught by anti-bot filtering. Same lesson as the manifest-reading saga: replay-style requests from an unusual client context get blocked in ways that aren't always an explicit error.
 
   **Still untested:** whether this manifest structure and the Bitmovin/React-fiber seek approach hold up on Yes STING, or on live (non-VOD) League Pass streams — everything validated so far is League Pass VOD replays only.
+
+- **v0.3: Home/schedule page — done (2026-09-09).** First real screen beyond the grid, and it surfaced a genuine architecture bug worth understanding.
+
+  **Real data sources validated**, all via page-context fetch (same lesson as Phase 3 — main-process fetch silently hangs against these hosts too):
+  - Today's games: `cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json` — official NBA CDN, no key needed. Empty most of this testing (NBA offseason in September), but the shape is right.
+  - Full upcoming schedule: `cdn.nba.com/static/json/staticData/scheduleLeagueV2.json` — only covers the *upcoming* season (starts Oct 2026), not historical games.
+  - Last completed game fallback: `stats.nba.com/stats/leaguegamefinder?LeagueID=00&Season=2025-26&SeasonType=Playoffs&PlayerOrTeam=T` — gives real historical results; used to find the actual last Finals game (2026-06-13, Knicks beat Spurs 94-90, Game 5) when there's nothing live today. Season string is currently hardcoded (`2025-26`) — will need updating once a new season is underway.
+  - Per-game deep link: `nba.com/game/{away}-vs-{home}-{gameId}?watchFullGame` — found by manually navigating to a real game and reading the URL back via the `Cmd+Shift+U` hotkey, not guessed. Confirmed: opens straight into the right game (needs one manual click to actually start playing — normal browser autoplay policy, not a bug).
+
+  **Real architecture bug found and fixed**: the video panes are native `WebContentsView`s, positioned by the main process in absolute window coordinates — a completely separate layer from the renderer's own HTML/CSS. The first implementation only toggled the renderer's `#home`/`#grid` `<div>` visibility via CSS, which did nothing to the native panes underneath — they kept rendering regardless, so the "home page" showed with the grid bleeding through behind it. Fixed by adding an explicit `currentView` state in the main process that gates both pane layout (`hideAllPanes()` vs. the real `layoutPanes()`) and audio muting (no pane gets audio while on the home page) — the renderer's CSS toggle alone was never going to be enough, since it has no visibility into or control over the native view layer at all.
+
+  Favorite-team selection persists to a local JSON file (`app.getPath('userData')/preferences.json`) but isn't wired into any scoring yet — that's v0.7's job once the recommendation engine exists.
