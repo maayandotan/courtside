@@ -85,6 +85,17 @@ Problem: jump the focused pane's video to the start of a specific quarter/period
 - **Phase 5 — 4-pane grid + polish.** Extend grid to 4-up, re-validate resource usage. Empty-pane "add a game" state, loading/error states throughout. Real budgeted visual polish pass. Milestone: 4 concurrent games, clean visual polish matching design mockups.
 - **Phase 6 — Schedule data + highlights (stretch).** TheSportsDB or API-Football integration. YouTube Data API highlight search per followed team. Blackout-awareness surfacing (informational only). Milestone: a "what's on tonight for my teams" view, with highlight reels for games not watched live.
 
+### 5a. Actual build sequence (2026-09-09) — supersedes the phase ordering above
+
+The phases above describe *what* to build; actual building surfaced a better *order*. Real usage revealed the app is missing a coherent skeleton — there's no home page at all right now, the grid is hardcoded to exactly 2 panes, and there's no formal way to add a service beyond editing `main.js` by hand. Rather than keep polishing one feature at a time, the plan going forward is to get a *thin, working slice* of every major flow in place first, then do a depth pass across all of them:
+
+- **v0.3 — Home/schedule page.** Browse real games, click one, it opens in a pane. Includes a favorite-team picker (persisted), but *not* wired into any scoring yet — that's v0.7.
+- **v0.4 — Dynamic grid.** 1–4 panes with add/remove, plus a solo-focus/fullscreen toggle per pane (other panes keep playing muted in the background).
+- **v0.5 — Formal Provider interface.** Turn the ad-hoc `skipCapable` flag into an explicit adapter/capability-detection pattern (open/play/pause/seek/getCurrentTime/getGameState, with per-service capability flags) *before* wiring in more services, not after.
+- **v0.6 — Hide-scores toggle.** Small, self-contained; rounds out the spoiler-safety story alongside skip-to-quarter.
+- **v0.7 — Recommendation engine v0.** One simple mode (e.g. closest final margin) to prove the "what to watch" pillar exists, with the favorite-team weighting from v0.3 wired in for real (favorite team's games rank at or near the top).
+- **v1.0 — Depth pass.** Hover-audio-switching, saved/draggable layouts, better Q2/Q4 precision (if a real fix is ever found), more real services, a real visual design pass, more recommendation modes (Best Performance, Upset of the Night, etc.), spoiler-free recommendation reveal (show "⭐ Highly Recommended" without the reason until after watching).
+
 ## 6. Deliberate scope decisions (state these explicitly in any writeup/interview)
 
 - Skip feature runs on one focused pane only — a performance tradeoff, not an oversight.
