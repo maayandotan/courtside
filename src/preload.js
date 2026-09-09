@@ -16,17 +16,25 @@ contextBridge.exposeInMainWorld('courtside', {
   onShowGrid: (callback) => {
     ipcRenderer.on('show-grid', () => callback());
   },
-  focusPane: (index) => ipcRenderer.send('focus-pane', index),
-  retryPane: (index) => ipcRenderer.send('retry-pane', index),
-  jumpToQuarter: (index, quarter) => ipcRenderer.send('jump-to-quarter', { index, quarter }),
-  nudgeQuarter: (index, direction) => ipcRenderer.send('nudge-quarter', { index, direction }),
+  onReturnHome: (callback) => {
+    ipcRenderer.on('return-home', () => callback());
+  },
+  focusPane: (id) => ipcRenderer.send('focus-pane', id),
+  retryPane: (id) => ipcRenderer.send('retry-pane', id),
+  jumpToQuarter: (id, quarter) => ipcRenderer.send('jump-to-quarter', { id, quarter }),
+  nudgeQuarter: (id, direction) => ipcRenderer.send('nudge-quarter', { id, direction }),
   setSplitRatio: (ratio) => ipcRenderer.send('set-split-ratio', ratio),
   getHomeData: () => ipcRenderer.invoke('get-home-data'),
   getTeams: () => ipcRenderer.invoke('get-teams'),
   getFavoriteTeam: () => ipcRenderer.invoke('get-favorite-team'),
   setFavoriteTeam: (tricode) => ipcRenderer.send('set-favorite-team', tricode),
-  openGame: (game) => ipcRenderer.send('open-game', game),
   showHome: () => ipcRenderer.send('show-home'),
   getEplHomeData: () => ipcRenderer.invoke('get-epl-home-data'),
-  openEplMatch: (match) => ipcRenderer.send('open-epl-match', match),
+  openGames: (games) => ipcRenderer.send('open-games', games),
+  addPane: (game) => ipcRenderer.send('add-pane', game),
+  replacePane: (id, game) => ipcRenderer.send('replace-pane', { id, game }),
+  closePane: (id) => ipcRenderer.send('close-pane', id),
+  onHomeNotice: (callback) => {
+    ipcRenderer.on('home-notice', (_event, payload) => callback(payload));
+  },
 });

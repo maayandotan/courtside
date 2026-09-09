@@ -357,6 +357,10 @@ function layoutPanes(win, panes, splitRatio) {
     }
     const col = i % cols;
     const row = Math.floor(i / cols);
+    // The last row may have fewer panes than `cols` (e.g. 3 panes: row 0
+    // has 2, row 1 has 1) — give that lone pane the row's full width
+    // instead of leaving a blank gap next to it.
+    const colsInRow = Math.min(cols, n - row * cols);
     let cellX;
     let cellWidth;
     if (useRatio) {
@@ -364,7 +368,7 @@ function layoutPanes(win, panes, splitRatio) {
       cellX = col === 0 ? 0 : firstWidth;
       cellWidth = col === 0 ? firstWidth : width - firstWidth;
     } else {
-      cellWidth = width / cols;
+      cellWidth = width / colsInRow;
       cellX = col * cellWidth;
     }
     const x = cellX + PANE_MARGIN;
@@ -472,13 +476,15 @@ const EPL_SEARCH_SCRIPT = (query) => `
   })()
 `;
 
-function createPane(win, index, { url, skipCapable }, layoutAll) {
+function createPane(win, id, { url, skipCapable, label, league }, layoutAll) {
   const view = new WebContentsView();
   win.contentView.addChildView(view);
 
   const pane = {
-    index,
+    id,
     url,
+    label: label || '',
+    league: league || null,
     view,
     ready: false,
     // Set while a scripted multi-step navigation (e.g. the EPL
@@ -488,12 +494,12 @@ function createPane(win, index, { url, skipCapable }, layoutAll) {
     autoNavigating: false,
     skip: skipCapable
       ? createSkipEngine(view, (manifestState) => {
-          win.webContents.send('pane-skip-state', { index, ...manifestState });
+          win.webContents.send('pane-skip-state', { id, ...manifestState });
         })
       : null,
   };
 
-  const sendStatus = (status) => win.webContents.send('pane-status', { index, ...status });
+  const sendStatus = (status) => win.webContents.send('pane-status', { id, ...status });
 
   // Some sites (e.g. Premier League's highlights, which redirect to
   // YouTube) use window.open()/target=_blank instead of a normal same-
@@ -504,7 +510,7 @@ function createPane(win, index, { url, skipCapable }, layoutAll) {
   // the parts of the architecture we actually control.
   view.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
     const finalUrl = normalizeYouTubeUrl(targetUrl);
-    console.log(`pane ${index}: intercepted popup, navigating in-place to`, finalUrl);
+    console.log(`pane ${id}: intercepted popup, navigating in-place to`, finalUrl);
     view.webContents.loadURL(finalUrl);
     return { action: 'deny' };
   });
@@ -528,12 +534,12 @@ function createPane(win, index, { url, skipCapable }, layoutAll) {
   view.webContents.on('did-start-loading', () => sendStatus({ state: 'loading' }));
   view.webContents.on('did-navigate-in-page', () => {
     const currentUrl = view.webContents.getURL();
-    console.log(`pane ${index}: did-navigate-in-page, url is now`, currentUrl);
+    console.log(`pane ${id}: did-navigate-in-page, url is now`, currentUrl);
     applyYouTubeSpoilerCss(currentUrl);
   });
   view.webContents.on('did-finish-load', () => {
     const currentUrl = view.webContents.getURL();
-    console.log(`pane ${index}: did-finish-load, url is now`, currentUrl);
+    console.log(`pane ${id}: did-finish-load, url is now`, currentUrl);
     applyYouTubeSpoilerCss(currentUrl);
     // While a scripted navigation is in flight, keep the pane hidden
     // (ready stays false, so layoutPanes collapses it to 0x0) rather
@@ -549,7 +555,7 @@ function createPane(win, index, { url, skipCapable }, layoutAll) {
     sendStatus({ state: 'error', message: description || 'Stream failed to load.' });
   });
 
-  view.webContents.loadURL(url);
+  if (url) view.webContents.loadURL(url);
   return pane;
 }
 
@@ -789,6 +795,66 @@ async function getEplHomeData(view) {
   }
 }
 
+// One dispatch table per league: resolve() turns a generic game
+// descriptor ({ league, ...fields }, sent from the renderer) into what a
+// pane needs to actually show it. Keeping this as data (not scattered
+// across IPC handlers) is what lets a game be opened into ANY pane slot
+// generically — the dynamic grid doesn't special-case NBA vs EPL beyond
+// this table — and gives future leagues (Champions League, etc.) a
+// natural place to plug in.
+const LEAGUE_PROVIDERS = {
+  nba: {
+    resolve(game) {
+      const url = `https://www.nba.com/game/${game.awayTricode.toLowerCase()}-vs-${game.homeTricode.toLowerCase()}-${game.gameId}?watchFullGame`;
+      return { url, skipCapable: true, label: `${game.awayName} @ ${game.homeName}` };
+    },
+  },
+  epl: {
+    resolve(game) {
+      const label = `${game.homeName} v ${game.awayName}`;
+      const handle = EPL_CLUB_YOUTUBE_HANDLES[game.homeName];
+      if (!handle) {
+        return { url: null, error: `No highlights channel configured yet for ${game.homeName}.` };
+      }
+      return {
+        url: `https://www.youtube.com/@${handle}`,
+        skipCapable: false,
+        label,
+        searchQuery: label,
+      };
+    },
+  },
+};
+
+// Does whatever's needed after a pane has been pointed at a resolved
+// game to actually land on real content — a plain load for most
+// leagues (createPane's own did-finish-load handler reveals it once
+// ready), or EPL's scripted-search-then-reveal dance for leagues whose
+// URL is a channel page rather than a direct deep link.
+function openGameContent(win, pane, game, resolved, layoutAll) {
+  win.webContents.send('pane-status', { id: pane.id, state: 'loading' });
+  if (game.league === 'epl') {
+    pane.autoNavigating = true;
+    const reveal = () => {
+      pane.autoNavigating = false;
+      pane.ready = true;
+      win.webContents.send('pane-status', { id: pane.id, state: 'ready' });
+      layoutAll();
+    };
+    pane.view.webContents.once('did-finish-load', () => {
+      // Give YouTube's own client-side JS a beat to finish wiring up
+      // the masthead search box before we drive it.
+      setTimeout(() => {
+        pane.view.webContents
+          .executeJavaScript(EPL_SEARCH_SCRIPT(resolved.searchQuery))
+          .then((result) => console.log(`pane ${pane.id}: EPL search script result`, result))
+          .catch((err) => console.error(`pane ${pane.id}: EPL search script failed`, err))
+          .finally(reveal);
+      }, 500);
+    });
+  }
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -803,22 +869,30 @@ function createWindow() {
 
   win.loadFile('src/renderer/index.html');
 
-  // Second pane is YouTube as a placeholder — testing the grid/focus
-  // mechanics while between real second-service subscriptions (Yes
-  // STING -> Hot Next TV). Swap in the real second service once that
-  // subscription is active; the grid/focus code itself doesn't care
-  // what's in a pane.
-  const paneConfigs = [
-    { url: 'https://www.nba.com/game/nyk-vs-sas-0042500405?watchFullGame', label: 'League Pass', skipCapable: true },
-    {
-      url: 'https://www.premierleague.com',
-      label: 'Premier League',
-      skipCapable: false,
-    },
-  ];
+  // Permanently-hidden panes (never in the grid, bounds always 0x0) that
+  // exist purely to run fetchViaPage's page-context fetch() trick for
+  // home-page data. Previously getHomeData/getEplHomeData just reused
+  // panes[0]/panes[1] since those always existed — but the grid is
+  // dynamic now (can be empty, e.g. on first launch before any game is
+  // opened), so home-data fetching needs views that aren't tied to
+  // whatever the user happens to have open. One utility view per league
+  // family, not a single shared one: footballapi.pulselive.com checks
+  // the request's Origin header against premierleague.com, so a fetch
+  // issued from an nba.com-loaded page is rejected as cross-origin
+  // (confirmed — it fails with a plain "Failed to fetch").
+  const createUtilityView = (url) => {
+    const view = new WebContentsView();
+    win.contentView.addChildView(view);
+    view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    view.webContents.loadURL(url);
+    return view;
+  };
+  const utilityViewNba = createUtilityView('https://www.nba.com');
+  const utilityViewEpl = createUtilityView('https://www.premierleague.com');
 
   let splitRatio = 0.5;
-  const panes = [];
+  let nextPaneId = 1;
+  const panes = []; // array ORDER = grid position; pane.id = stable identity for all messaging
 
   // The panes are native WebContentsViews layered on top of the window
   // in absolute coordinates — a completely separate layer from the
@@ -840,12 +914,12 @@ function createWindow() {
     layoutPanes(win, panes, splitRatio);
   };
 
-  let focusedIndex = 0;
+  let focusedPaneId = null;
   const applyAudioMuting = () => {
     if (currentView !== 'grid') {
       panes.forEach((pane) => pane.view.webContents.setAudioMuted(true));
     } else {
-      panes.forEach((pane, i) => pane.view.webContents.setAudioMuted(i !== focusedIndex));
+      panes.forEach((pane) => pane.view.webContents.setAudioMuted(pane.id !== focusedPaneId));
     }
   };
 
@@ -855,43 +929,132 @@ function createWindow() {
     applyAudioMuting();
   };
 
-  paneConfigs.forEach((cfg, index) => {
-    panes.push(createPane(win, index, cfg, layoutAll));
-  });
-
-  const setFocus = (index) => {
-    if (index < 0 || index >= panes.length) return;
-    focusedIndex = index;
+  const setFocus = (id) => {
+    if (!panes.some((p) => p.id === id)) return;
+    focusedPaneId = id;
     applyAudioMuting();
-    win.webContents.send('focus-changed', { index });
+    win.webContents.send('focus-changed', { id });
+  };
+
+  const broadcastPanesConfig = () => {
+    win.webContents.send(
+      'panes-config',
+      panes.map((p) => ({ id: p.id, label: p.label, skipCapable: !!p.skip }))
+    );
+  };
+
+  // Tears down one pane's WebContentsView entirely — used both when
+  // closing a pane for good and when replacing its content (which
+  // rebuilds a fresh pane object in the same slot, since skip-capability
+  // is wired up once at construction and can't be safely toggled on a
+  // live view).
+  const destroyPaneView = (pane) => {
+    try { win.contentView.removeChildView(pane.view); } catch (e) { /* already gone */ }
+    try { pane.view.webContents.close(); } catch (e) { /* already gone */ }
+  };
+
+  // Resolves a generic game descriptor via its league's provider and
+  // either replaces the pane at `existingIndex` (reusing its id — a
+  // swap should look, from the outside, like that one pane's content
+  // just changed) or appends a new one. Validates the resolved URL
+  // BEFORE tearing anything down, so a bad selection (e.g. an EPL club
+  // with no mapped YouTube handle) never destroys a working pane.
+  const setPane = (existingIndex, game) => {
+    const provider = LEAGUE_PROVIDERS[game.league];
+    const resolved = provider.resolve(game);
+    if (!resolved.url) {
+      console.log(`setPane: could not resolve "${game.league}" game:`, resolved.error);
+      win.webContents.send('home-notice', { message: resolved.error || 'That game is not available yet.' });
+      return null;
+    }
+
+    let id;
+    if (existingIndex != null) {
+      destroyPaneView(panes[existingIndex]);
+      id = panes[existingIndex].id;
+    } else {
+      id = nextPaneId++;
+    }
+
+    const pane = createPane(
+      win,
+      id,
+      { url: resolved.url, skipCapable: resolved.skipCapable, label: resolved.label, league: game.league },
+      layoutAll
+    );
+
+    if (existingIndex != null) panes[existingIndex] = pane;
+    else panes.push(pane);
+
+    openGameContent(win, pane, game, resolved, layoutAll);
+    broadcastPanesConfig();
+    return pane;
+  };
+
+  const closePane = (id) => {
+    const idx = panes.findIndex((p) => p.id === id);
+    if (idx === -1) return;
+    destroyPaneView(panes[idx]);
+    panes.splice(idx, 1);
+    if (focusedPaneId === id) {
+      focusedPaneId = panes[0] ? panes[0].id : null;
+      win.webContents.send('focus-changed', { id: focusedPaneId });
+    }
+    broadcastPanesConfig();
+    if (panes.length === 0) {
+      setView('home');
+      win.webContents.send('return-home');
+    } else {
+      layoutAll();
+      applyAudioMuting();
+    }
+  };
+
+  // Tears down every existing pane and opens exactly the given games
+  // (1-4) as a fresh grid — used both for a plain single-game click and
+  // for "Watch Selected" in multi-view mode. Deliberately does NOT try
+  // to preserve/diff against whatever was already open: "depending on
+  // what you press" means pressing a game shows exactly that game, not
+  // whatever was already in the grid plus this one.
+  const openFreshGrid = (games) => {
+    panes.splice(0).forEach(destroyPaneView);
+    games.slice(0, 4).forEach((game) => setPane(null, game));
+    if (panes.length === 0) {
+      // Every game failed to resolve (e.g. an EPL club with no mapped
+      // handle) — stay on the home page rather than showing an empty
+      // grid; setPane already sent a home-notice for each failure.
+      setView('home');
+      return;
+    }
+    focusedPaneId = panes[0].id;
+    setView('grid');
+    win.webContents.send('show-grid');
+    win.webContents.send('focus-changed', { id: focusedPaneId });
+    applyAudioMuting();
   };
 
   win.webContents.on('did-finish-load', () => {
-    win.webContents.send(
-      'panes-config',
-      paneConfigs.map((cfg, index) => ({ index, label: cfg.label, skipCapable: cfg.skipCapable }))
-    );
-    setFocus(0);
+    broadcastPanesConfig();
     setView('home');
   });
 
   ipcMain.on('show-home', () => setView('home'));
 
-  ipcMain.on('focus-pane', (_event, index) => setFocus(index));
-  ipcMain.on('retry-pane', (_event, index) => {
-    const pane = panes[index];
+  ipcMain.on('focus-pane', (_event, id) => setFocus(id));
+  ipcMain.on('retry-pane', (_event, id) => {
+    const pane = panes.find((p) => p.id === id);
     if (!pane) return;
     pane.ready = false;
     pane.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
-    win.webContents.send('pane-status', { index, state: 'loading' });
+    win.webContents.send('pane-status', { id, state: 'loading' });
     pane.view.webContents.reload();
   });
-  ipcMain.on('jump-to-quarter', (_event, { index, quarter }) => {
-    const pane = panes[index];
+  ipcMain.on('jump-to-quarter', (_event, { id, quarter }) => {
+    const pane = panes.find((p) => p.id === id);
     if (pane && pane.skip) pane.skip.jumpToQuarter(quarter);
   });
-  ipcMain.on('nudge-quarter', (_event, { index, direction }) => {
-    const pane = panes[index];
+  ipcMain.on('nudge-quarter', (_event, { id, direction }) => {
+    const pane = panes.find((p) => p.id === id);
     if (!pane || !pane.skip) return;
     if (direction === 'next') pane.skip.stepNext();
     else pane.skip.stepPrev();
@@ -901,84 +1064,37 @@ function createWindow() {
     layoutAll();
   });
 
-  ipcMain.handle('get-home-data', () => getHomeData(panes[0].view));
+  ipcMain.handle('get-home-data', () => getHomeData(utilityViewNba));
   ipcMain.handle('get-teams', () => NBA_TEAMS);
   ipcMain.handle('get-favorite-team', () => loadPrefs().favoriteTeam || null);
   ipcMain.on('set-favorite-team', (_event, tricode) => saveFavoriteTeam(tricode));
-  ipcMain.on('open-game', (_event, { gameId, awayTricode, homeTricode }) => {
-    // Only League Pass (pane 0) understands NBA game deep links right
-    // now — the home page is NBA-specific until more real services
-    // with their own schedules are wired in (v0.5's provider work).
-    const pane = panes[0];
-    const url = `https://www.nba.com/game/${awayTricode.toLowerCase()}-vs-${homeTricode.toLowerCase()}-${gameId}?watchFullGame`;
-    pane.ready = false;
-    win.webContents.send('pane-status', { index: 0, state: 'loading' });
-    pane.view.webContents.loadURL(url);
+  ipcMain.handle('get-epl-home-data', () => getEplHomeData(utilityViewEpl));
+
+  // Plain click on the home page (multi-view off): opens exactly the
+  // games pressed, discarding whatever grid existed before. Also used
+  // by "Watch Selected" in multi-view mode with up to 4 games at once.
+  ipcMain.on('open-games', (_event, games) => openFreshGrid(games));
+
+  // "+ Add game" from within the grid: appends one more pane without
+  // touching any existing one.
+  ipcMain.on('add-pane', (_event, game) => {
+    if (panes.length >= 4) return;
+    setPane(null, game);
     setView('grid');
     win.webContents.send('show-grid');
   });
 
-  ipcMain.handle('get-epl-home-data', () => getEplHomeData(panes[1].view));
-  ipcMain.on('open-epl-match', (_event, { awayName, homeName }) => {
-    // No per-match highlights URL could be reliably constructed (PL's
-    // own PulseLive API id doesn't match its own site's URL id scheme —
-    // see README). Fall back to searching within the HOME club's own
-    // official YouTube channel — confirmed live that highlights are
-    // posted by the home team, not the league's @premierleague channel
-    // (never a general YouTube search, so no fan-made content) — the
-    // search RESULTS page itself gets spoiler-hidden too
-    // (YOUTUBE_SEARCH_HIDE_CSS), since official highlight titles almost
-    // always contain the final score.
-    const pane = panes[1];
-    const handle = EPL_CLUB_YOUTUBE_HANDLES[homeName];
-    if (!handle) {
-      console.log(`open-epl-match: no known YouTube handle for "${homeName}" yet — add it to EPL_CLUB_YOUTUBE_HANDLES`);
-      // Surface this instead of a silent no-op: clicking a match with no
-      // mapped handle used to do nothing visible at all.
-      pane.ready = false;
-      setView('grid');
-      win.webContents.send('show-grid');
-      win.webContents.send('pane-status', {
-        index: 1,
-        state: 'error',
-        message: `No highlights channel configured yet for ${homeName}.`,
-      });
-      return;
-    }
-    const query = `${homeName} v ${awayName}`;
-    const url = `https://www.youtube.com/@${handle}`;
-    console.log('open-epl-match: navigating to', url, 'then scripting search for', query);
-    pane.ready = false;
-    // Keeps the channel page and search-results page from flashing on
-    // screen mid-script — layoutPanes collapses a non-ready pane to
-    // 0x0, so the user only sees the loading state until the scripted
-    // search+click actually lands on the real highlights video.
-    pane.autoNavigating = true;
-    win.webContents.send('pane-status', { index: 1, state: 'loading' });
-
-    const revealPane = () => {
-      pane.autoNavigating = false;
-      pane.ready = true;
-      win.webContents.send('pane-status', { index: 1, state: 'ready' });
-      layoutAll();
-    };
-    const runSearch = () => {
-      pane.view.webContents
-        .executeJavaScript(EPL_SEARCH_SCRIPT(query))
-        .then((result) => console.log('open-epl-match: search script result', result))
-        .catch((err) => console.error('open-epl-match: search script failed', err))
-        .finally(revealPane);
-    };
-    pane.view.webContents.once('did-finish-load', () => {
-      // Give YouTube's own client-side JS a beat to finish wiring up
-      // the masthead search box before we drive it.
-      setTimeout(runSearch, 500);
-    });
-    pane.view.webContents.loadURL(url);
-
+  // "Swap" on a specific pane: replaces just that pane's content,
+  // leaving every other pane running untouched.
+  ipcMain.on('replace-pane', (_event, { id, game }) => {
+    const idx = panes.findIndex((p) => p.id === id);
+    if (idx === -1) return;
+    setPane(idx, game);
     setView('grid');
     win.webContents.send('show-grid');
   });
+
+  ipcMain.on('close-pane', (_event, id) => closePane(id));
 
   win.on('resize', layoutAll);
 
@@ -990,10 +1106,12 @@ function createWindow() {
   // (Not Cmd+Shift+[/]: Cmd+Shift+[ silently did nothing in testing,
   // almost certainly colliding with macOS's own "previous Space"
   // Mission Control shortcut before it ever reached the app.)
+  const focusedPane = () => panes.find((p) => p.id === focusedPaneId) || null;
+
   const focusedSkip = () => {
-    const pane = panes[focusedIndex];
+    const pane = focusedPane();
     if (!pane || !pane.skip) {
-      console.log(`pane ${focusedIndex} doesn't support skip-to-quarter (not an HLS/manifest-based service).`);
+      console.log(`pane ${focusedPaneId} doesn't support skip-to-quarter (not an HLS/manifest-based service).`);
       return null;
     }
     return pane.skip;
@@ -1009,16 +1127,18 @@ function createWindow() {
   // out what page you landed on (same pattern used to find League
   // Pass's game URLs earlier).
   globalShortcut.register('CommandOrControl+Shift+U', () => {
-    const pane = panes[focusedIndex];
+    const pane = focusedPane();
     if (!pane) return;
-    console.log(`pane ${focusedIndex} URL:`, pane.view.webContents.getURL());
+    console.log(`pane ${pane.id} URL:`, pane.view.webContents.getURL());
   });
 
-  // TEMP: scan the focused pane's DOM for likely search-box elements —
-  // used to find YouTube's real channel-search input/button before
-  // trying to script it, rather than guessing selectors blind.
+  // Scans the focused pane's DOM for likely search-box elements — used
+  // to find a new service's real search input/button before scripting
+  // it (this is how EPL's YouTube search box was found), rather than
+  // guessing selectors blind. Kept as a permanent dev tool since the
+  // same technique will be needed for future leagues.
   globalShortcut.register('CommandOrControl+Shift+D', async () => {
-    const pane = panes[focusedIndex];
+    const pane = focusedPane();
     if (!pane) return;
     try {
       const result = await pane.view.webContents.executeJavaScript(`
@@ -1042,39 +1162,6 @@ function createWindow() {
       console.log('DOM scan for search elements:', JSON.stringify(result, null, 2));
     } catch (err) {
       console.error('DOM scan failed:', err);
-    }
-  });
-
-  // TEMP: validate ESPN's public scoreboard API as a data source for
-  // Premier League (and re-check it for NBA, since it includes team
-  // logos directly — might replace the separate cdn.nba.com source).
-  globalShortcut.register('CommandOrControl+Shift+E', async () => {
-    const pane = panes[0];
-    const urls = {
-      nba: 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard',
-      epl: 'https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard',
-    };
-    for (const [key, url] of Object.entries(urls)) {
-      try {
-        const text = await fetchViaPage(pane.view, url);
-        fs.writeFileSync(path.join(app.getPath('desktop'), `courtside_espn_${key}_debug.json`), text);
-        console.log(`espn test: ${key} saved, length`, text.length);
-      } catch (err) {
-        console.error(`espn test: ${key} failed:`, err.message);
-      }
-    }
-
-    // TEMP: validate Premier League's own PulseLive API (powers
-    // premierleague.com itself) as the data source for EPL instead —
-    // its match IDs should match the site's own URLs directly, unlike
-    // ESPN's separate ID system.
-    try {
-      const pulseUrl = 'https://footballapi.pulselive.com/football/fixtures?comps=1&page=0&pageSize=20&sort=desc&statuses=C';
-      const text = await fetchViaPage(panes[1].view, pulseUrl);
-      fs.writeFileSync(path.join(app.getPath('desktop'), 'courtside_pulselive_debug.json'), text);
-      console.log('pulselive test: saved, length', text.length);
-    } catch (err) {
-      console.error('pulselive test failed:', err.message);
     }
   });
 
