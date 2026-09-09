@@ -8,6 +8,10 @@ const CONTROLS_HEIGHT = 32;
 const PANE_HEADER_HEIGHT = LABEL_HEIGHT + CONTROLS_HEIGHT;
 const PANE_MARGIN = 2;
 
+// Text to search for with the Cmd+Shift+D DOM-scan hotkey (see its
+// registration below) — edit and rebuild per investigation.
+const DOM_SCAN_QUERY = 'Sep';
+
 // Parses an HLS media playlist into the VOD-timeline offset of every
 // #EXT-X-DISCONTINUITY marker (broadcast structural boundaries — timeouts,
 // period transitions), plus total runtime, plus whether this is a VOD
@@ -476,6 +480,101 @@ const EPL_SEARCH_SCRIPT = (query) => `
   })()
 `;
 
+// UEFA's fixtures page (uefa.com/uefachampionsleague/fixtures-results/
+// #/d/{date}) has no per-match URL — everything for a given date lives
+// on one page, with a small highlights thumbnail on each match card
+// (only visible once logged into a UEFA account; a free account is
+// enough, but this app never touches those credentials — the user logs
+// in manually within the pane, same as DAZN/League Pass elsewhere in
+// this app). Rather than a text search box like YouTube, this finds
+// the specific match by looking for the smallest DOM element whose
+// text contains BOTH team names (the match card itself, not some huge
+// ancestor container also matching by coincidence), then clicks the
+// first plausible interactive element inside it — expected to be the
+// highlights thumbnail, but not yet confirmed against the real
+// logged-in DOM (best-effort first pass, refine live if it clicks the
+// wrong thing).
+// Confirmed live (2026-09-09): a cold loadURL() straight to
+// #/d/{date} does NOT reliably render that date's match cards, even
+// waiting several seconds — but clicking the on-page date tab for the
+// same date (a real in-app navigation, exactly like YouTube's search
+// needing a real interaction rather than a raw URL) does. So this
+// clicks the date tab itself before looking for the match, rather
+// than trusting the hash alone. Match ids ARE contiguous within a
+// single date's block (confirmed: three known Sept-8 matches came
+// back 2049555/2049556/2049557, and the full block for that date was
+// 2049553-2049558) but with no known formula for a block's starting
+// id — visiting the fixtures page and clicking through is still the
+// only reliable route to a specific match, not URL construction.
+// UEFA's site is built on Stencil web components (confirmed via its
+// own JS bundle names) — the date-tab strip and match cards live
+// inside shadow roots, which plain document.querySelectorAll/
+// textContent completely miss (they don't pierce shadow boundaries at
+// all). This is why the first two attempts found nothing: the search
+// itself was blind to most of the page, not just slow. deepQueryAll
+// walks light DOM AND every nested shadow root to build one real
+// element list to search over.
+const CL_HIGHLIGHT_SCRIPT = (homeName, awayName) => `
+  (async () => {
+    function collectWithShadow(root, out) {
+      root.querySelectorAll('*').forEach((el) => {
+        out.push(el);
+        if (el.shadowRoot) collectWithShadow(el.shadowRoot, out);
+      });
+    }
+
+    // Finds the smallest element whose deep text (light DOM + all
+    // nested shadow roots — plain textContent sees neither on this
+    // Stencil-built site) contains both team names. Memoized bottom-up
+    // per call so each element's text is computed once and reused by
+    // its ancestors — the earlier version recomputed a fresh deep-text
+    // walk for every one of thousands of elements on every comparison
+    // (effectively O(n^2)), which on a page this heavy likely never
+    // finished a single pass inside the retry loop at all — a much
+    // simpler explanation for "takes forever" than anything about the
+    // site itself.
+    function findSmallestMatch() {
+      const all = [];
+      collectWithShadow(document, all);
+      const cache = new WeakMap();
+      function ownText(el) {
+        if (cache.has(el)) return cache.get(el);
+        let text = '';
+        el.childNodes.forEach((n) => {
+          if (n.nodeType === Node.TEXT_NODE) text += n.textContent;
+          else if (n.nodeType === Node.ELEMENT_NODE) text += ownText(n);
+        });
+        if (el.shadowRoot) text += ownText(el.shadowRoot);
+        cache.set(el, text);
+        return text;
+      }
+      let best = null;
+      let bestLen = Infinity;
+      for (const el of all) {
+        const text = ownText(el);
+        if (text.length < bestLen && text.includes(${JSON.stringify(homeName)}) && text.includes(${JSON.stringify(awayName)})) {
+          best = el;
+          bestLen = text.length;
+        }
+      }
+      return best;
+    }
+
+    const deadline = Date.now() + 15000;
+    let matchEl = null;
+    while (Date.now() < deadline && !matchEl) {
+      matchEl = findSmallestMatch();
+      if (!matchEl) await new Promise((r) => setTimeout(r, 500));
+    }
+    if (!matchEl) return { ok: false, reason: 'match card not found', searchedFor: [${JSON.stringify(homeName)}, ${JSON.stringify(awayName)}] };
+    const clickable = [];
+    collectWithShadow(matchEl, clickable);
+    const target = clickable.find((el) => ['BUTTON', 'A', 'VIDEO', 'IMG'].includes(el.tagName) || el.getAttribute('role') === 'button') || matchEl;
+    target.click();
+    return { ok: true };
+  })()
+`;
+
 function createPane(win, id, { url, skipCapable, label, league }, layoutAll) {
   const view = new WebContentsView();
   win.contentView.addChildView(view);
@@ -549,7 +648,18 @@ function createPane(win, id, { url, skipCapable, label, league }, layoutAll) {
     sendStatus({ state: 'ready' });
     layoutAll();
   });
-  view.webContents.on('did-fail-load', (_event, _code, description) => {
+  view.webContents.on('did-fail-load', (_event, errorCode, description, validatedUrl, isMainFrame) => {
+    console.log(`pane ${id}: did-fail-load`, { errorCode, description, validatedUrl, isMainFrame });
+    // -3 is ERR_ABORTED — Chromium fires this constantly for a load
+    // that got superseded by another navigation (completely normal
+    // mid-redirect-chain, e.g. an OAuth login bounce through 2-3
+    // domains), not a real failure. Treating it as fatal was surfacing
+    // a false "Stream failed to load" error mid-flight during scripted
+    // navigations that redirect through a login page (Champions
+    // League's UEFA.tv auth flow does this) — the eventual real
+    // did-finish-load was still coming.
+    if (errorCode === -3) return;
+    if (!isMainFrame) return;
     pane.ready = false;
     view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
     sendStatus({ state: 'error', message: description || 'Stream failed to load.' });
@@ -795,6 +905,42 @@ async function getEplHomeData(view) {
   }
 }
 
+// Champions League home data: unlike PulseLive (EPL), ESPN's own
+// soccer scoreboard gives fixtures, real scores, AND team crests all
+// in one payload with no separate id-mismatch to work around — a much
+// simpler source than what EPL needed. Score is still deliberately
+// left out of what's returned/displayed, matching the no-spoilers
+// pattern used everywhere else.
+async function getClHomeData(view) {
+  try {
+    const end = new Date();
+    const start = new Date(end.getTime() - 10 * 24 * 60 * 60 * 1000);
+    const fmt = (d) => d.toISOString().slice(0, 10).replace(/-/g, '');
+    const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard?dates=${fmt(start)}-${fmt(end)}`;
+    const text = await fetchViaPage(view, url);
+    const data = JSON.parse(text);
+    const completed = (data.events || []).filter(
+      (ev) => ev.competitions?.[0]?.status?.type?.name === 'STATUS_FULL_TIME'
+    );
+    const matches = completed.slice(-6).reverse().map((ev) => {
+      const comp = ev.competitions[0];
+      const home = comp.competitors.find((c) => c.homeAway === 'home');
+      const away = comp.competitors.find((c) => c.homeAway === 'away');
+      return {
+        homeName: home.team.displayName,
+        awayName: away.team.displayName,
+        homeCrest: home.team.logo,
+        awayCrest: away.team.logo,
+        date: ev.date.slice(0, 10),
+      };
+    });
+    return { heading: 'Champions League — recent matches', matches };
+  } catch (e) {
+    console.error('getClHomeData failed:', e.message);
+    return { heading: 'Champions League — unavailable', matches: [] };
+  }
+}
+
 // One dispatch table per league: resolve() turns a generic game
 // descriptor ({ league, ...fields }, sent from the renderer) into what a
 // pane needs to actually show it. Keeping this as data (not scattered
@@ -824,6 +970,15 @@ const LEAGUE_PROVIDERS = {
       };
     },
   },
+  cl: {
+    resolve(game) {
+      return {
+        url: `https://www.uefa.com/uefachampionsleague/fixtures-results/#/d/${game.date}`,
+        skipCapable: false,
+        label: `${game.homeName} v ${game.awayName}`,
+      };
+    },
+  },
 };
 
 // Does whatever's needed after a pane has been pointed at a resolved
@@ -833,26 +988,43 @@ const LEAGUE_PROVIDERS = {
 // URL is a channel page rather than a direct deep link.
 function openGameContent(win, pane, game, resolved, layoutAll) {
   win.webContents.send('pane-status', { id: pane.id, state: 'loading' });
+
+  // Both EPL and Champions League land on a channel/listing page first
+  // and need a script to actually reach the highlights video — run
+  // that script once the page loads, keeping the pane hidden
+  // (autoNavigating) until it resolves either way, so the intermediate
+  // page never flashes on screen.
+  let script = null;
+  let initialDelayMs = 500;
   if (game.league === 'epl') {
-    pane.autoNavigating = true;
-    const reveal = () => {
-      pane.autoNavigating = false;
-      pane.ready = true;
-      win.webContents.send('pane-status', { id: pane.id, state: 'ready' });
-      layoutAll();
-    };
-    pane.view.webContents.once('did-finish-load', () => {
-      // Give YouTube's own client-side JS a beat to finish wiring up
-      // the masthead search box before we drive it.
-      setTimeout(() => {
-        pane.view.webContents
-          .executeJavaScript(EPL_SEARCH_SCRIPT(resolved.searchQuery))
-          .then((result) => console.log(`pane ${pane.id}: EPL search script result`, result))
-          .catch((err) => console.error(`pane ${pane.id}: EPL search script failed`, err))
-          .finally(reveal);
-      }, 500);
-    });
+    script = EPL_SEARCH_SCRIPT(resolved.searchQuery);
+  } else if (game.league === 'cl') {
+    script = CL_HIGHLIGHT_SCRIPT(game.homeName, game.awayName);
+    // UEFA's fixtures page ships a much heavier JS bundle than
+    // YouTube's — confirmed live it needs noticeably longer to finish
+    // rendering.
+    initialDelayMs = 2500;
   }
+  if (!script) return;
+
+  pane.autoNavigating = true;
+  const reveal = () => {
+    pane.autoNavigating = false;
+    pane.ready = true;
+    win.webContents.send('pane-status', { id: pane.id, state: 'ready' });
+    layoutAll();
+  };
+  pane.view.webContents.once('did-finish-load', () => {
+    // Give the page's own client-side JS a beat to finish wiring up
+    // before we drive it.
+    setTimeout(() => {
+      pane.view.webContents
+        .executeJavaScript(script)
+        .then((result) => console.log(`pane ${pane.id}: ${game.league} highlight script result`, result))
+        .catch((err) => console.error(`pane ${pane.id}: ${game.league} highlight script failed`, err))
+        .finally(reveal);
+    }, initialDelayMs);
+  });
 }
 
 function createWindow() {
@@ -1069,6 +1241,7 @@ function createWindow() {
   ipcMain.handle('get-favorite-team', () => loadPrefs().favoriteTeam || null);
   ipcMain.on('set-favorite-team', (_event, tricode) => saveFavoriteTeam(tricode));
   ipcMain.handle('get-epl-home-data', () => getEplHomeData(utilityViewEpl));
+  ipcMain.handle('get-cl-home-data', () => getClHomeData(utilityViewNba));
 
   // Plain click on the home page (multi-view off): opens exactly the
   // games pressed, discarding whatever grid existed before. Also used
@@ -1137,29 +1310,59 @@ function createWindow() {
   // it (this is how EPL's YouTube search box was found), rather than
   // guessing selectors blind. Kept as a permanent dev tool since the
   // same technique will be needed for future leagues.
+  // General-purpose, shadow-DOM-aware DOM inspector for the focused
+  // pane — used to find real selectors on a new site rather than
+  // guessing blind (this is how EPL's YouTube search box was found).
+  // Pierces shadow roots (plain querySelectorAll/textContent don't —
+  // confirmed this matters: UEFA's site is built on Stencil web
+  // components and was completely invisible to the non-piercing
+  // version of this scan). Dumps every element whose own deep text
+  // contains DOM_SCAN_QUERY (edit the constant below per investigation,
+  // rebuild, and press the hotkey — quicker than adding a new hotkey
+  // each time).
   globalShortcut.register('CommandOrControl+Shift+D', async () => {
     const pane = focusedPane();
     if (!pane) return;
     try {
       const result = await pane.view.webContents.executeJavaScript(`
         (() => {
-          const candidates = [];
-          document.querySelectorAll('input, button, [role="button"], ytd-searchbox, tp-yt-paper-icon-button').forEach((el) => {
-            const label = (el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('placeholder') || '');
-            if (/search/i.test(label) || /search/i.test(el.id || '') || /search/i.test(el.className || '')) {
-              candidates.push({
-                tag: el.tagName,
-                id: el.id || null,
-                className: typeof el.className === 'string' ? el.className.slice(0, 80) : null,
-                ariaLabel: el.getAttribute('aria-label'),
-                placeholder: el.getAttribute('placeholder'),
+          function deepQueryAll(root) {
+            const out = [];
+            const walk = (node) => {
+              node.querySelectorAll('*').forEach((el) => {
+                out.push(el);
+                if (el.shadowRoot) walk(el.shadowRoot);
               });
-            }
-          });
-          return candidates.slice(0, 20);
+            };
+            walk(root);
+            return out;
+          }
+          function deepText(el) {
+            let text = '';
+            el.childNodes.forEach((n) => {
+              if (n.nodeType === Node.TEXT_NODE) text += n.textContent;
+              else if (n.nodeType === Node.ELEMENT_NODE) text += deepText(n);
+            });
+            if (el.shadowRoot) text += deepText(el.shadowRoot);
+            return text;
+          }
+          const query = ${JSON.stringify(DOM_SCAN_QUERY)};
+          const matches = deepQueryAll(document)
+            .filter((el) => deepText(el).includes(query))
+            .sort((a, b) => deepText(a).length - deepText(b).length)
+            .slice(0, 20)
+            .map((el) => ({
+              tag: el.tagName,
+              id: el.id || null,
+              className: typeof el.className === 'string' ? el.className.slice(0, 80) : null,
+              role: el.getAttribute('role'),
+              ariaLabel: el.getAttribute('aria-label'),
+              text: deepText(el).trim().slice(0, 60),
+            }));
+          return matches;
         })()
       `);
-      console.log('DOM scan for search elements:', JSON.stringify(result, null, 2));
+      console.log(`DOM scan for "${DOM_SCAN_QUERY}":`, JSON.stringify(result, null, 2));
     } catch (err) {
       console.error('DOM scan failed:', err);
     }
