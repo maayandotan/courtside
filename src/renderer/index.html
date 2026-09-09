@@ -33,8 +33,54 @@
   }
   .wordmark { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; }
   .subtitle { font-size: 13px; color: var(--muted); margin-left: auto; }
+  .home-btn {
+    padding: 5px 12px;
+    border-radius: 6px;
+    border: none;
+    background: #23262e;
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .home-btn:hover { background: var(--accent); }
 
-  #grid { flex: 1 1 auto; display: flex; }
+  #home {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 24px 32px;
+    background: var(--bg);
+  }
+  .home-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
+  .home-toolbar label { font-size: 13px; color: var(--muted); }
+  .home-toolbar select {
+    background: var(--header-bg);
+    color: var(--text);
+    border: 1px solid #2a2d36;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+  .home-heading { font-size: 14px; font-weight: 700; color: var(--muted); margin-bottom: 12px; }
+  .game-list { display: flex; flex-direction: column; gap: 8px; max-width: 560px; }
+  .game-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 16px;
+    background: var(--header-bg);
+    border: 2px solid transparent;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .game-row:hover { border-color: var(--accent); }
+  .game-row .matchup { font-size: 14px; font-weight: 600; flex: 1 1 auto; }
+  .game-row .status { font-size: 12px; color: var(--muted); }
+  .game-row.favorite { border-color: #ffb020; }
+  .game-row .fav-star { color: #ffb020; margin-right: 4px; }
+  .home-empty { font-size: 13px; color: var(--muted); }
+
+  #grid { flex: 1 1 auto; display: none; }
   .pane-cell { flex: 1 1 0%; display: flex; flex-direction: column; min-width: 0; }
 
   .divider {
@@ -131,15 +177,100 @@
 <body>
   <header>
     <span class="wordmark">CourtSide</span>
-    <span class="subtitle">Phase 2 &mdash; click a pane's label to focus it</span>
+    <button class="home-btn" id="home-btn">Home</button>
+    <span class="subtitle">Click a pane's label to focus it</span>
   </header>
+
+  <div id="home">
+    <div class="home-toolbar">
+      <label for="favorite-team-select">Favorite team</label>
+      <select id="favorite-team-select">
+        <option value="">None</option>
+      </select>
+    </div>
+    <div class="home-heading" id="home-heading">Loading&hellip;</div>
+    <div class="game-list" id="game-list"></div>
+  </div>
 
   <div id="grid"></div>
 
   <script>
     const grid = document.getElementById('grid');
+    const homeView = document.getElementById('home');
     const cells = new Map();
     const skipCapableByIndex = new Map();
+
+    function showHome() {
+      grid.style.display = 'none';
+      homeView.style.display = 'block';
+    }
+    function showGrid() {
+      homeView.style.display = 'none';
+      grid.style.display = 'flex';
+    }
+
+    document.getElementById('home-btn').addEventListener('click', () => {
+      showHome();
+      window.courtside.showHome();
+    });
+    window.courtside.onShowGrid(showGrid);
+
+    // --- Home page: favorite team + game list ---
+    const favoriteSelect = document.getElementById('favorite-team-select');
+    const homeHeading = document.getElementById('home-heading');
+    const gameList = document.getElementById('game-list');
+    let favoriteTeam = null;
+
+    async function loadHomeView() {
+      const [teams, savedFavorite, homeData] = await Promise.all([
+        window.courtside.getTeams(),
+        window.courtside.getFavoriteTeam(),
+        window.courtside.getHomeData(),
+      ]);
+      favoriteTeam = savedFavorite;
+      favoriteSelect.innerHTML = '<option value="">None</option>' +
+        teams.map((t) => `<option value="${t.tricode}">${t.name}</option>`).join('');
+      favoriteSelect.value = favoriteTeam || '';
+      renderGames(homeData);
+    }
+
+    favoriteSelect.addEventListener('change', () => {
+      favoriteTeam = favoriteSelect.value || null;
+      window.courtside.setFavoriteTeam(favoriteTeam);
+      renderGames(lastHomeData);
+    });
+
+    let lastHomeData = { heading: '', games: [] };
+
+    function renderGames(homeData) {
+      lastHomeData = homeData;
+      homeHeading.textContent = homeData.heading;
+      gameList.innerHTML = '';
+      if (homeData.games.length === 0) {
+        gameList.innerHTML = '<div class="home-empty">No games to show right now.</div>';
+        return;
+      }
+      homeData.games.forEach((game) => {
+        const isFavorite = favoriteTeam && (game.awayTricode === favoriteTeam || game.homeTricode === favoriteTeam);
+        const row = document.createElement('div');
+        row.className = 'game-row' + (isFavorite ? ' favorite' : '');
+        row.innerHTML = `
+          <span class="matchup">${isFavorite ? '<span class="fav-star">★</span>' : ''}${game.awayName} @ ${game.homeName}</span>
+          <span class="status">${game.status}</span>
+        `;
+        row.addEventListener('click', () => {
+          window.courtside.openGame({
+            gameId: game.gameId,
+            awayTricode: game.awayTricode,
+            homeTricode: game.homeTricode,
+          });
+        });
+        gameList.appendChild(row);
+      });
+    }
+
+    showHome();
+    loadHomeView();
 
     function buildPaneCell(index, label, skipCapable) {
       skipCapableByIndex.set(index, skipCapable);
