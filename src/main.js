@@ -380,6 +380,98 @@ function layoutPanes(win, panes, splitRatio) {
   });
 }
 
+// If a URL is a shortened YouTube link (youtu.be/{id}), normalizes it
+// to the standard watch page. YouTube's dedicated embed player
+// (youtube.com/embed/{id}) rejects top-level/data: URL navigation with
+// error 153 (it expects a real hosted-page origin genuinely embedding
+// it in an <iframe>) — not worth fighting. Spoiler-relevant chrome
+// (title, comments, related-video thumbnails) on the normal watch page
+// is instead hidden via CSS injection once it loads — see
+// YOUTUBE_SPOILER_HIDE_CSS below.
+function normalizeYouTubeUrl(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    if (u.hostname === 'youtu.be') {
+      const videoId = u.pathname.slice(1);
+      return `https://www.youtube.com/watch?v=${videoId}&autoplay=1`;
+    }
+  } catch (e) {
+    // not a valid URL — fall through
+  }
+  return rawUrl;
+}
+
+// Hides YouTube watch-page chrome that could reveal a score/result
+// before a highlight is actually watched: the title, description,
+// comments, and the related/"up next" sidebar (often full of
+// spoiler-laden thumbnails and text for the same match).
+const YOUTUBE_SPOILER_HIDE_CSS = `
+  #related, #comments, #title, ytd-watch-metadata,
+  ytd-comments, #meta-contents, ytd-masthead {
+    display: none !important;
+  }
+`;
+
+// Hides thumbnails and titles on a YouTube search-within-channel
+// results page — official highlight video titles almost always contain
+// the final score ("Arsenal 2-1 Chelsea | Highlights"), so this is not
+// optional the way it might be elsewhere. Uses visibility (not
+// display:none) so result rows keep their normal size/position and
+// stay clickable, even though their content isn't visible.
+const YOUTUBE_SEARCH_HIDE_CSS = `
+  ytd-thumbnail, #video-title, ytd-video-meta-block,
+  .metadata-snippet-container, ytd-masthead {
+    visibility: hidden !important;
+  }
+`;
+
+function isYouTubeSearchPage(urlString) {
+  try {
+    const u = new URL(urlString);
+    return /(^|\.)youtube\.com$/.test(u.hostname) && u.pathname.endsWith('/search');
+  } catch (e) {
+    return false;
+  }
+}
+
+// A fresh loadURL() straight to /@handle/search?query=X was confirmed
+// (live, via manual testing) to render as a plain channel page, not
+// search results — YouTube's SPA only runs the search route on a real
+// client-side navigation, not a top-level load. So instead we load the
+// plain channel page and then drive the real masthead search box
+// ourselves: set its value via the native input setter (bypasses
+// React's controlled-input tracking, which a plain .value= assignment
+// doesn't trigger), fire an input event so YouTube's own JS notices,
+// then click the actual submit button — mimicking a genuine user
+// search rather than navigating to a URL directly.
+const EPL_SEARCH_SCRIPT = (query) => `
+  (async () => {
+    const input = document.querySelector('input.ytSearchboxComponentInput');
+    const button = document.querySelector('button.ytSearchboxComponentSearchButton');
+    if (!input || !button) return { ok: false, reason: 'search box not found' };
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(input, ${JSON.stringify(query)});
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    button.click();
+
+    // Results render via client-side routing (no full page load), so
+    // poll the DOM instead of waiting on a navigation event.
+    // ytd-video-renderer is a normal search-result row; sponsored/ad
+    // slots use other element types, so this naturally skips them and
+    // lands on the first genuine result.
+    const deadline = Date.now() + 6000;
+    let firstResultLink = null;
+    while (Date.now() < deadline && !firstResultLink) {
+      const firstRow = document.querySelector('ytd-video-renderer');
+      firstResultLink = firstRow && firstRow.querySelector('a#video-title, a#thumbnail');
+      if (!firstResultLink) await new Promise((r) => setTimeout(r, 200));
+    }
+    if (!firstResultLink) return { ok: false, reason: 'no search results found' };
+    firstResultLink.click();
+    return { ok: true };
+  })()
+`;
+
 function createPane(win, index, { url, skipCapable }, layoutAll) {
   const view = new WebContentsView();
   win.contentView.addChildView(view);
@@ -389,6 +481,11 @@ function createPane(win, index, { url, skipCapable }, layoutAll) {
     url,
     view,
     ready: false,
+    // Set while a scripted multi-step navigation (e.g. the EPL
+    // highlights channel search) is in progress, so intermediate pages
+    // (the channel page, the search results) stay hidden instead of
+    // flashing on screen before the final destination loads.
+    autoNavigating: false,
     skip: skipCapable
       ? createSkipEngine(view, (manifestState) => {
           win.webContents.send('pane-skip-state', { index, ...manifestState });
@@ -398,8 +495,50 @@ function createPane(win, index, { url, skipCapable }, layoutAll) {
 
   const sendStatus = (status) => win.webContents.send('pane-status', { index, ...status });
 
+  // Some sites (e.g. Premier League's highlights, which redirect to
+  // YouTube) use window.open()/target=_blank instead of a normal same-
+  // page navigation. Left alone, Electron spawns an untracked native
+  // window outside the whole pane/grid model. Deny the popup and
+  // navigate this same pane instead — keeps everything inside the
+  // shell, matching "indistinguishable from a normal browser tab" for
+  // the parts of the architecture we actually control.
+  view.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+    const finalUrl = normalizeYouTubeUrl(targetUrl);
+    console.log(`pane ${index}: intercepted popup, navigating in-place to`, finalUrl);
+    view.webContents.loadURL(finalUrl);
+    return { action: 'deny' };
+  });
+
+  // YouTube's own navigation (channel -> search -> watch, driven by our
+  // scripted search) is all client-side routing, not full page loads —
+  // did-finish-load only fires once, for the initial channel page. Hook
+  // did-navigate-in-page too so spoiler-hiding CSS gets reapplied at
+  // each SPA route change.
+  const applyYouTubeSpoilerCss = (currentUrl) => {
+    try {
+      const hostname = new URL(currentUrl).hostname;
+      if (!/(^|\.)youtube\.com$/.test(hostname)) return;
+      const css = isYouTubeSearchPage(currentUrl) ? YOUTUBE_SEARCH_HIDE_CSS : YOUTUBE_SPOILER_HIDE_CSS;
+      view.webContents.insertCSS(css).catch(() => {});
+    } catch (e) {
+      // not a valid URL yet — ignore
+    }
+  };
+
   view.webContents.on('did-start-loading', () => sendStatus({ state: 'loading' }));
+  view.webContents.on('did-navigate-in-page', () => {
+    const currentUrl = view.webContents.getURL();
+    console.log(`pane ${index}: did-navigate-in-page, url is now`, currentUrl);
+    applyYouTubeSpoilerCss(currentUrl);
+  });
   view.webContents.on('did-finish-load', () => {
+    const currentUrl = view.webContents.getURL();
+    console.log(`pane ${index}: did-finish-load, url is now`, currentUrl);
+    applyYouTubeSpoilerCss(currentUrl);
+    // While a scripted navigation is in flight, keep the pane hidden
+    // (ready stays false, so layoutPanes collapses it to 0x0) rather
+    // than revealing each intermediate page as it loads.
+    if (pane.autoNavigating) return;
     pane.ready = true;
     sendStatus({ state: 'ready' });
     layoutAll();
@@ -546,6 +685,110 @@ async function getHomeData(view) {
   return { heading: 'No games available', games: [] };
 }
 
+// Official match highlights are posted by the HOME club's own YouTube
+// channel, not the league's (confirmed live: Everton's highlights for
+// an Everton match were on Everton's channel, not @premierleague's).
+// Handles for clubs not yet in this list (promoted/relegated teams
+// change season to season) fall back to no highlights link for now —
+// add them one by one as needed, same pattern as everything else here.
+const EPL_CLUB_YOUTUBE_HANDLES = {
+  Arsenal: 'Arsenal',
+  'Aston Villa': 'AVFCOfficial',
+  Bournemouth: 'afcbournemouth',
+  Brentford: 'BrentfordFC',
+  Brighton: 'OfficialBHAFC',
+  'Brighton and Hove Albion': 'OfficialBHAFC',
+  Burnley: 'burnleyofficial',
+  Chelsea: 'ChelseaFC',
+  'Crystal Palace': 'CPFC',
+  Everton: 'Everton',
+  Fulham: 'FulhamFC',
+  'Leeds United': 'LeedsUnited',
+  Leeds: 'LeedsUnited',
+  Liverpool: 'LiverpoolFC',
+  'Manchester City': 'mancity',
+  'Manchester United': 'ManUtd',
+  Newcastle: 'NUFC',
+  'Newcastle United': 'NUFC',
+  'Nottingham Forest': 'NFFC',
+  Sunderland: 'SunderlandAFC',
+  Tottenham: 'SpursOfficial',
+  'Tottenham Hotspur': 'SpursOfficial',
+  'West Ham': 'WestHamUnited',
+  'West Ham United': 'WestHamUnited',
+  Wolves: 'Wolves',
+  'Wolverhampton Wanderers': 'Wolves',
+};
+
+// PulseLive's own club.id does NOT correspond to
+// resources.premierleague.com/premierleague/badges/50/t{id}.png's
+// numbering (confirmed empirically: club.id 1/4/7 for Arsenal/Chelsea/
+// Everton actually returned Man Utd/Newcastle/Aston Villa's crests on
+// that CDN) — a third PL-side ID mismatch, same category of bug as the
+// PulseLive-vs-site match-id mismatch above. Sidestepping it entirely
+// by using ESPN's team-logo CDN instead, keyed by PulseLive's
+// club.name string (ESPN's own numeric team ids, confirmed directly
+// against https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/teams).
+const EPL_CLUB_CRESTS = {
+  Arsenal: 359,
+  'Aston Villa': 362,
+  Bournemouth: 349,
+  Brentford: 337,
+  'Brighton and Hove Albion': 331,
+  Burnley: 379,
+  Chelsea: 363,
+  'Crystal Palace': 384,
+  Everton: 368,
+  Fulham: 370,
+  'Leeds United': 357,
+  Liverpool: 364,
+  'Manchester City': 382,
+  'Manchester United': 360,
+  'Newcastle United': 361,
+  'Nottingham Forest': 393,
+  Sunderland: 366,
+  'Tottenham Hotspur': 367,
+  'West Ham United': 371,
+  'Wolverhampton Wanderers': 380,
+};
+
+function eplCrestUrl(clubName) {
+  const espnId = EPL_CLUB_CRESTS[clubName];
+  return espnId ? `https://a.espncdn.com/i/teamlogos/soccer/500/${espnId}.png` : null;
+}
+
+// Premier League home data: real recent results from PulseLive (the
+// API that actually powers premierleague.com's own site). Deliberately
+// does NOT include scores at all in what's returned — not just hidden
+// in the UI, actually absent from the payload — since the whole point
+// is spoiler safety, and there's no reason to even have the score
+// value in the renderer if it should never be shown.
+// Crest URL pattern (resources.premierleague.com/.../t{clubId}.png) is
+// unverified — try it, and it just won't show if wrong (low-cost to
+// get wrong, unlike a video URL).
+async function getEplHomeData(view) {
+  try {
+    const url = 'https://footballapi.pulselive.com/football/fixtures?comps=1&page=0&pageSize=10&sort=desc&statuses=C';
+    const text = await fetchViaPage(view, url);
+    const data = JSON.parse(text);
+    const matches = (data.content || []).slice(0, 6).map((m) => {
+      const [teamA, teamB] = m.teams; // array order observed to be [home, away]
+      return {
+        id: m.id,
+        homeName: teamA.team.name,
+        awayName: teamB.team.name,
+        homeCrest: eplCrestUrl(teamA.team.club.name),
+        awayCrest: eplCrestUrl(teamB.team.club.name),
+        date: (m.kickoff && m.kickoff.label) || '',
+      };
+    });
+    return { heading: 'Premier League — recent matches', matches };
+  } catch (e) {
+    console.error('getEplHomeData failed:', e.message);
+    return { heading: 'Premier League — unavailable', matches: [] };
+  }
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -568,12 +811,8 @@ function createWindow() {
   const paneConfigs = [
     { url: 'https://www.nba.com/game/nyk-vs-sas-0042500405?watchFullGame', label: 'League Pass', skipCapable: true },
     {
-      // A specific free replay fixture, used as the default so there's
-      // always something playable without hunting through DAZN's own
-      // browse UI first — same reasoning as League Pass loading
-      // nba.com/watch rather than the bare homepage.
-      url: 'https://www.dazn.com/en-IL/fixture/ContentId:dn9kqyqgul5f1r43q6g544pka/dn9kqyqgul5f1r43q6g544pka/1ujtefonry54h1a95az9ifbplq',
-      label: 'DAZN (test)',
+      url: 'https://www.premierleague.com',
+      label: 'Premier League',
       skipCapable: false,
     },
   ];
@@ -679,6 +918,68 @@ function createWindow() {
     win.webContents.send('show-grid');
   });
 
+  ipcMain.handle('get-epl-home-data', () => getEplHomeData(panes[1].view));
+  ipcMain.on('open-epl-match', (_event, { awayName, homeName }) => {
+    // No per-match highlights URL could be reliably constructed (PL's
+    // own PulseLive API id doesn't match its own site's URL id scheme —
+    // see README). Fall back to searching within the HOME club's own
+    // official YouTube channel — confirmed live that highlights are
+    // posted by the home team, not the league's @premierleague channel
+    // (never a general YouTube search, so no fan-made content) — the
+    // search RESULTS page itself gets spoiler-hidden too
+    // (YOUTUBE_SEARCH_HIDE_CSS), since official highlight titles almost
+    // always contain the final score.
+    const pane = panes[1];
+    const handle = EPL_CLUB_YOUTUBE_HANDLES[homeName];
+    if (!handle) {
+      console.log(`open-epl-match: no known YouTube handle for "${homeName}" yet — add it to EPL_CLUB_YOUTUBE_HANDLES`);
+      // Surface this instead of a silent no-op: clicking a match with no
+      // mapped handle used to do nothing visible at all.
+      pane.ready = false;
+      setView('grid');
+      win.webContents.send('show-grid');
+      win.webContents.send('pane-status', {
+        index: 1,
+        state: 'error',
+        message: `No highlights channel configured yet for ${homeName}.`,
+      });
+      return;
+    }
+    const query = `${homeName} v ${awayName}`;
+    const url = `https://www.youtube.com/@${handle}`;
+    console.log('open-epl-match: navigating to', url, 'then scripting search for', query);
+    pane.ready = false;
+    // Keeps the channel page and search-results page from flashing on
+    // screen mid-script — layoutPanes collapses a non-ready pane to
+    // 0x0, so the user only sees the loading state until the scripted
+    // search+click actually lands on the real highlights video.
+    pane.autoNavigating = true;
+    win.webContents.send('pane-status', { index: 1, state: 'loading' });
+
+    const revealPane = () => {
+      pane.autoNavigating = false;
+      pane.ready = true;
+      win.webContents.send('pane-status', { index: 1, state: 'ready' });
+      layoutAll();
+    };
+    const runSearch = () => {
+      pane.view.webContents
+        .executeJavaScript(EPL_SEARCH_SCRIPT(query))
+        .then((result) => console.log('open-epl-match: search script result', result))
+        .catch((err) => console.error('open-epl-match: search script failed', err))
+        .finally(revealPane);
+    };
+    pane.view.webContents.once('did-finish-load', () => {
+      // Give YouTube's own client-side JS a beat to finish wiring up
+      // the masthead search box before we drive it.
+      setTimeout(runSearch, 500);
+    });
+    pane.view.webContents.loadURL(url);
+
+    setView('grid');
+    win.webContents.send('show-grid');
+  });
+
   win.on('resize', layoutAll);
 
   // --- Calibration hotkeys (operate on the currently FOCUSED pane) ---
@@ -711,6 +1012,70 @@ function createWindow() {
     const pane = panes[focusedIndex];
     if (!pane) return;
     console.log(`pane ${focusedIndex} URL:`, pane.view.webContents.getURL());
+  });
+
+  // TEMP: scan the focused pane's DOM for likely search-box elements —
+  // used to find YouTube's real channel-search input/button before
+  // trying to script it, rather than guessing selectors blind.
+  globalShortcut.register('CommandOrControl+Shift+D', async () => {
+    const pane = panes[focusedIndex];
+    if (!pane) return;
+    try {
+      const result = await pane.view.webContents.executeJavaScript(`
+        (() => {
+          const candidates = [];
+          document.querySelectorAll('input, button, [role="button"], ytd-searchbox, tp-yt-paper-icon-button').forEach((el) => {
+            const label = (el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('placeholder') || '');
+            if (/search/i.test(label) || /search/i.test(el.id || '') || /search/i.test(el.className || '')) {
+              candidates.push({
+                tag: el.tagName,
+                id: el.id || null,
+                className: typeof el.className === 'string' ? el.className.slice(0, 80) : null,
+                ariaLabel: el.getAttribute('aria-label'),
+                placeholder: el.getAttribute('placeholder'),
+              });
+            }
+          });
+          return candidates.slice(0, 20);
+        })()
+      `);
+      console.log('DOM scan for search elements:', JSON.stringify(result, null, 2));
+    } catch (err) {
+      console.error('DOM scan failed:', err);
+    }
+  });
+
+  // TEMP: validate ESPN's public scoreboard API as a data source for
+  // Premier League (and re-check it for NBA, since it includes team
+  // logos directly — might replace the separate cdn.nba.com source).
+  globalShortcut.register('CommandOrControl+Shift+E', async () => {
+    const pane = panes[0];
+    const urls = {
+      nba: 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard',
+      epl: 'https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard',
+    };
+    for (const [key, url] of Object.entries(urls)) {
+      try {
+        const text = await fetchViaPage(pane.view, url);
+        fs.writeFileSync(path.join(app.getPath('desktop'), `courtside_espn_${key}_debug.json`), text);
+        console.log(`espn test: ${key} saved, length`, text.length);
+      } catch (err) {
+        console.error(`espn test: ${key} failed:`, err.message);
+      }
+    }
+
+    // TEMP: validate Premier League's own PulseLive API (powers
+    // premierleague.com itself) as the data source for EPL instead —
+    // its match IDs should match the site's own URLs directly, unlike
+    // ESPN's separate ID system.
+    try {
+      const pulseUrl = 'https://footballapi.pulselive.com/football/fixtures?comps=1&page=0&pageSize=20&sort=desc&statuses=C';
+      const text = await fetchViaPage(panes[1].view, pulseUrl);
+      fs.writeFileSync(path.join(app.getPath('desktop'), 'courtside_pulselive_debug.json'), text);
+      console.log('pulselive test: saved, length', text.length);
+    } catch (err) {
+      console.error('pulselive test failed:', err.message);
+    }
   });
 
   // Q3 lands reliably (validated across many real games — see README).
