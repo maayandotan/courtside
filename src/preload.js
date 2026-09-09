@@ -27,4 +27,6 @@ contextBridge.exposeInMainWorld('courtside', {
   setFavoriteTeam: (tricode) => ipcRenderer.send('set-favorite-team', tricode),
   openGame: (game) => ipcRenderer.send('open-game', game),
   showHome: () => ipcRenderer.send('show-home'),
+  getEplHomeData: () => ipcRenderer.invoke('get-epl-home-data'),
+  openEplMatch: (match) => ipcRenderer.send('open-epl-match', match),
 });

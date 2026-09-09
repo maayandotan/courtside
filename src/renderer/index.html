@@ -74,11 +74,12 @@
     cursor: pointer;
   }
   .game-row:hover { border-color: var(--accent); }
-  .game-row .matchup { font-size: 14px; font-weight: 600; flex: 1 1 auto; }
+  .game-row .matchup { font-size: 14px; font-weight: 600; flex: 1 1 auto; display: flex; align-items: center; gap: 8px; }
   .game-row .status { font-size: 12px; color: var(--muted); }
   .game-row.favorite { border-color: #ffb020; }
   .game-row .fav-star { color: #ffb020; margin-right: 4px; }
   .home-empty { font-size: 13px; color: var(--muted); }
+  .team-crest { width: 22px; height: 22px; object-fit: contain; flex: 0 0 auto; }
 
   #grid { flex: 1 1 auto; display: none; }
   .pane-cell { flex: 1 1 0%; display: flex; flex-direction: column; min-width: 0; }
@@ -190,6 +191,9 @@
     </div>
     <div class="home-heading" id="home-heading">Loading&hellip;</div>
     <div class="game-list" id="game-list"></div>
+
+    <div class="home-heading" id="epl-heading" style="margin-top: 32px;">Loading&hellip;</div>
+    <div class="game-list" id="epl-list"></div>
   </div>
 
   <div id="grid"></div>
@@ -222,16 +226,18 @@
     let favoriteTeam = null;
 
     async function loadHomeView() {
-      const [teams, savedFavorite, homeData] = await Promise.all([
+      const [teams, savedFavorite, homeData, eplData] = await Promise.all([
         window.courtside.getTeams(),
         window.courtside.getFavoriteTeam(),
         window.courtside.getHomeData(),
+        window.courtside.getEplHomeData(),
       ]);
       favoriteTeam = savedFavorite;
       favoriteSelect.innerHTML = '<option value="">None</option>' +
         teams.map((t) => `<option value="${t.tricode}">${t.name}</option>`).join('');
       favoriteSelect.value = favoriteTeam || '';
       renderGames(homeData);
+      renderEplMatches(eplData);
     }
 
     favoriteSelect.addEventListener('change', () => {
@@ -252,10 +258,17 @@
       }
       homeData.games.forEach((game) => {
         const isFavorite = favoriteTeam && (game.awayTricode === favoriteTeam || game.homeTricode === favoriteTeam);
+        const awayLogo = `https://a.espncdn.com/i/teamlogos/nba/500/${game.awayTricode.toLowerCase()}.png`;
+        const homeLogo = `https://a.espncdn.com/i/teamlogos/nba/500/${game.homeTricode.toLowerCase()}.png`;
         const row = document.createElement('div');
         row.className = 'game-row' + (isFavorite ? ' favorite' : '');
         row.innerHTML = `
-          <span class="matchup">${isFavorite ? '<span class="fav-star">★</span>' : ''}${game.awayName} @ ${game.homeName}</span>
+          <span class="matchup">
+            ${isFavorite ? '<span class="fav-star">★</span>' : ''}
+            <img class="team-crest" src="${awayLogo}" onerror="this.style.display='none'">
+            ${game.awayName} @ ${game.homeName}
+            <img class="team-crest" src="${homeLogo}" onerror="this.style.display='none'">
+          </span>
           <span class="status">${game.status}</span>
         `;
         row.addEventListener('click', () => {
@@ -266,6 +279,38 @@
           });
         });
         gameList.appendChild(row);
+      });
+    }
+
+    // Premier League: deliberately no score in this data at all (see
+    // getEplHomeData in main.js) — clicking a match searches within the
+    // official @premierleague YouTube channel only, never a general
+    // search, so results are always official highlights.
+    const eplHeading = document.getElementById('epl-heading');
+    const eplList = document.getElementById('epl-list');
+
+    function renderEplMatches(eplData) {
+      eplHeading.textContent = eplData.heading;
+      eplList.innerHTML = '';
+      if (eplData.matches.length === 0) {
+        eplList.innerHTML = '<div class="home-empty">No matches to show right now.</div>';
+        return;
+      }
+      eplData.matches.forEach((match) => {
+        const row = document.createElement('div');
+        row.className = 'game-row';
+        row.innerHTML = `
+          <span class="matchup">
+            <img class="team-crest" src="${match.homeCrest}" onerror="this.style.display='none'">
+            ${match.homeName} v ${match.awayName}
+            <img class="team-crest" src="${match.awayCrest}" onerror="this.style.display='none'">
+          </span>
+          <span class="status">${match.date}</span>
+        `;
+        row.addEventListener('click', () => {
+          window.courtside.openEplMatch({ awayName: match.awayName, homeName: match.homeName });
+        });
+        eplList.appendChild(row);
       });
     }
 
