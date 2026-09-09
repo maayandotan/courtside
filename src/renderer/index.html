@@ -78,8 +78,62 @@
   .game-row .status { font-size: 12px; color: var(--muted); }
   .game-row.favorite { border-color: #ffb020; }
   .game-row .fav-star { color: #ffb020; margin-right: 4px; }
+  .game-row.selected { border-color: var(--accent); background: #1a2540; }
+  .game-row .select-check {
+    width: 18px; height: 18px; border-radius: 4px; flex: 0 0 auto;
+    border: 2px solid #3a3d46; display: none; align-items: center; justify-content: center; font-size: 12px;
+  }
+  .multi-view-on .select-check { display: flex; }
+  .game-row.selected .select-check { border-color: var(--accent); background: var(--accent); }
   .home-empty { font-size: 13px; color: var(--muted); }
   .team-crest { width: 22px; height: 22px; object-fit: contain; flex: 0 0 auto; }
+
+  .multi-view-toggle {
+    padding: 5px 12px;
+    border-radius: 6px;
+    border: 1px solid #2a2d36;
+    background: var(--header-bg);
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .multi-view-toggle.on { background: var(--accent); color: var(--text); border-color: var(--accent); }
+
+  .home-banner {
+    display: none;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    margin-bottom: 20px;
+    border-radius: 8px;
+    background: #1a2540;
+    border: 1px solid var(--accent);
+    font-size: 13px;
+    max-width: 560px;
+  }
+  .home-banner.error { background: #2a1a1a; border-color: #b0392f; }
+  .home-banner .cancel-link { margin-left: auto; color: var(--muted); cursor: pointer; text-decoration: underline; font-size: 12px; }
+
+  .watch-selected-bar {
+    display: none;
+    position: sticky;
+    bottom: 16px;
+    margin-top: 16px;
+    max-width: 560px;
+  }
+  .watch-selected-btn {
+    padding: 10px 18px;
+    border-radius: 8px;
+    border: none;
+    background: var(--accent);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .watch-selected-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
 
   #grid { flex: 1 1 auto; display: none; }
   .pane-cell { flex: 1 1 0%; display: flex; flex-direction: column; min-width: 0; }
@@ -108,6 +162,20 @@
   .pane-cell.focused .pane-label { border-color: var(--accent); background: #1a2540; }
   .pane-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
   .pane-cell.focused .pane-dot { background: var(--accent); }
+  .pane-label .label-text { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pane-label .pane-action {
+    flex: 0 0 auto;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 4px;
+    border: none;
+    background: #23262e;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .pane-label .pane-action:hover { background: var(--accent); }
+  .pane-label .pane-action.close-btn:hover { background: #b0392f; }
 
   .pane-controls {
     height: 32px;
@@ -179,6 +247,7 @@
   <header>
     <span class="wordmark">CourtSide</span>
     <button class="home-btn" id="home-btn">Home</button>
+    <button class="home-btn" id="add-pane-btn" style="display: none;">+ Add game</button>
     <span class="subtitle">Click a pane's label to focus it</span>
   </header>
 
@@ -188,12 +257,25 @@
       <select id="favorite-team-select">
         <option value="">None</option>
       </select>
+      <button class="multi-view-toggle" id="multi-view-toggle" style="margin-left: auto;">Multi-View: Off</button>
+    </div>
+    <div class="home-banner" id="pending-action-banner">
+      <span id="pending-action-text"></span>
+      <span class="cancel-link" id="pending-action-cancel">Cancel</span>
+    </div>
+    <div class="home-banner error" id="notice-banner">
+      <span id="notice-text"></span>
+      <span class="cancel-link" id="notice-dismiss">Dismiss</span>
     </div>
     <div class="home-heading" id="home-heading">Loading&hellip;</div>
     <div class="game-list" id="game-list"></div>
 
     <div class="home-heading" id="epl-heading" style="margin-top: 32px;">Loading&hellip;</div>
     <div class="game-list" id="epl-list"></div>
+
+    <div class="watch-selected-bar" id="watch-selected-bar">
+      <button class="watch-selected-btn" id="watch-selected-btn" disabled>Watch Selected (0)</button>
+    </div>
   </div>
 
   <div id="grid"></div>
@@ -201,28 +283,97 @@
   <script>
     const grid = document.getElementById('grid');
     const homeView = document.getElementById('home');
-    const cells = new Map();
-    const skipCapableByIndex = new Map();
+    const cells = new Map(); // keyed by stable pane id, not grid position
+    const skipCapableById = new Map();
+    const addPaneBtn = document.getElementById('add-pane-btn');
+
+    // --- Multi-view / pending-pane-action state (all renderer-side;
+    // main.js just gets told which exact games to open/add/replace) ---
+    let multiViewMode = false;
+    let selectedGames = []; // up to 4 generic game descriptors
+    // { type: 'replace', paneId, label } | { type: 'add' } | null — set
+    // by a pane's Swap button or the header's "+ Add game" button, so
+    // the NEXT home-page click routes into that specific pane instead
+    // of opening a fresh grid.
+    let pendingAction = null;
+
+    function gameKey(g) {
+      return g.league === 'nba' ? `nba:${g.gameId}` : `epl:${g.homeName}|${g.awayName}`;
+    }
+
+    let paneCount = 0;
+    let inGridView = false;
+
+    // Up to 2 panes uses the existing flex row (so the draggable
+    // splitRatio divider, which only understands exactly 2 panes,
+    // keeps working unchanged). 3-4 panes switches #grid to CSS Grid —
+    // this MUST mirror layoutPanes' row/col math in main.js exactly,
+    // since that function positions the actual native WebContentsViews
+    // independently of this DOM chrome; a mismatch there is what made
+    // 3/4-pane grids look broken (labels laid out in one row while the
+    // real video panes sat in a wrapped 2-column grid underneath).
+    function applyGridDisplayMode() {
+      if (!inGridView) { grid.style.display = 'none'; return; }
+      if (paneCount <= 2) {
+        grid.style.display = 'flex';
+        grid.style.gridTemplateColumns = '';
+        grid.style.gridTemplateRows = '';
+      } else {
+        grid.style.display = 'grid';
+        grid.style.gridTemplateColumns = 'repeat(2, 1fr)';
+        grid.style.gridTemplateRows = 'repeat(2, 1fr)';
+      }
+    }
+
+    function updateAddPaneVisibility() {
+      addPaneBtn.style.display = inGridView && paneCount > 0 && paneCount < 4 ? 'inline-block' : 'none';
+    }
 
     function showHome() {
-      grid.style.display = 'none';
+      inGridView = false;
+      applyGridDisplayMode();
       homeView.style.display = 'block';
+      addPaneBtn.style.display = 'none';
     }
     function showGrid() {
+      inGridView = true;
       homeView.style.display = 'none';
-      grid.style.display = 'flex';
+      applyGridDisplayMode();
+      pendingAction = null;
+      updatePendingBanner();
+      updateAddPaneVisibility();
     }
 
     document.getElementById('home-btn').addEventListener('click', () => {
+      pendingAction = null;
+      updatePendingBanner();
       showHome();
       window.courtside.showHome();
     });
     window.courtside.onShowGrid(showGrid);
+    window.courtside.onReturnHome(showHome);
+
+    addPaneBtn.addEventListener('click', () => {
+      pendingAction = { type: 'add' };
+      multiViewMode = false;
+      selectedGames = [];
+      updateMultiViewUI();
+      updatePendingBanner();
+      showHome();
+      window.courtside.showHome();
+    });
 
     // --- Home page: favorite team + game list ---
     const favoriteSelect = document.getElementById('favorite-team-select');
     const homeHeading = document.getElementById('home-heading');
     const gameList = document.getElementById('game-list');
+    const multiViewToggle = document.getElementById('multi-view-toggle');
+    const pendingBanner = document.getElementById('pending-action-banner');
+    const pendingText = document.getElementById('pending-action-text');
+    const noticeBanner = document.getElementById('notice-banner');
+    const noticeText = document.getElementById('notice-text');
+    const watchSelectedBar = document.getElementById('watch-selected-bar');
+    const watchSelectedBtn = document.getElementById('watch-selected-btn');
     let favoriteTeam = null;
 
     async function loadHomeView() {
@@ -246,6 +397,82 @@
       renderGames(lastHomeData);
     });
 
+    // Clicking a game row does one of three things depending on mode:
+    // routes into a pending Swap/Add target, toggles selection in
+    // multi-view mode, or (default) opens a fresh grid with just this
+    // one game — never the old "always shows NBA + Prem" behavior.
+    function handleGameClick(game) {
+      if (pendingAction) {
+        if (pendingAction.type === 'replace') window.courtside.replacePane(pendingAction.paneId, game);
+        else window.courtside.addPane(game);
+        pendingAction = null;
+        updatePendingBanner();
+        return;
+      }
+      if (multiViewMode) {
+        const key = gameKey(game);
+        const idx = selectedGames.findIndex((g) => gameKey(g) === key);
+        if (idx >= 0) selectedGames.splice(idx, 1);
+        else if (selectedGames.length < 4) selectedGames.push(game);
+        renderGames(lastHomeData);
+        renderEplMatches(lastEplData);
+        updateWatchSelectedUI();
+        return;
+      }
+      window.courtside.openGames([game]);
+    }
+
+    function updatePendingBanner() {
+      if (pendingAction) {
+        pendingBanner.style.display = 'flex';
+        pendingText.textContent = pendingAction.type === 'replace'
+          ? `Picking a replacement for "${pendingAction.label}" — click a game below.`
+          : 'Adding a new game to the view — click a game below.';
+      } else {
+        pendingBanner.style.display = 'none';
+      }
+    }
+    document.getElementById('pending-action-cancel').addEventListener('click', () => {
+      pendingAction = null;
+      updatePendingBanner();
+    });
+    document.getElementById('notice-dismiss').addEventListener('click', () => {
+      noticeBanner.style.display = 'none';
+    });
+    window.courtside.onHomeNotice(({ message }) => {
+      noticeText.textContent = message;
+      noticeBanner.style.display = 'flex';
+    });
+
+    function updateMultiViewUI() {
+      multiViewToggle.textContent = `Multi-View: ${multiViewMode ? 'On' : 'Off'}`;
+      multiViewToggle.classList.toggle('on', multiViewMode);
+      gameList.classList.toggle('multi-view-on', multiViewMode);
+      eplList.classList.toggle('multi-view-on', multiViewMode);
+      updateWatchSelectedUI();
+    }
+    function updateWatchSelectedUI() {
+      watchSelectedBar.style.display = multiViewMode ? 'block' : 'none';
+      watchSelectedBtn.textContent = `Watch Selected (${selectedGames.length})`;
+      watchSelectedBtn.disabled = selectedGames.length === 0;
+    }
+    multiViewToggle.addEventListener('click', () => {
+      multiViewMode = !multiViewMode;
+      if (!multiViewMode) selectedGames = [];
+      pendingAction = null;
+      updatePendingBanner();
+      updateMultiViewUI();
+      renderGames(lastHomeData);
+      renderEplMatches(lastEplData);
+    });
+    watchSelectedBtn.addEventListener('click', () => {
+      if (selectedGames.length === 0) return;
+      window.courtside.openGames(selectedGames);
+      multiViewMode = false;
+      selectedGames = [];
+      updateMultiViewUI();
+    });
+
     let lastHomeData = { heading: '', games: [] };
 
     function renderGames(homeData) {
@@ -256,40 +483,46 @@
         gameList.innerHTML = '<div class="home-empty">No games to show right now.</div>';
         return;
       }
-      homeData.games.forEach((game) => {
-        const isFavorite = favoriteTeam && (game.awayTricode === favoriteTeam || game.homeTricode === favoriteTeam);
-        const awayLogo = `https://a.espncdn.com/i/teamlogos/nba/500/${game.awayTricode.toLowerCase()}.png`;
-        const homeLogo = `https://a.espncdn.com/i/teamlogos/nba/500/${game.homeTricode.toLowerCase()}.png`;
+      homeData.games.forEach((g) => {
+        const game = {
+          league: 'nba',
+          gameId: g.gameId,
+          awayTricode: g.awayTricode,
+          homeTricode: g.homeTricode,
+          awayName: g.awayName,
+          homeName: g.homeName,
+        };
+        const isFavorite = favoriteTeam && (g.awayTricode === favoriteTeam || g.homeTricode === favoriteTeam);
+        const isSelected = multiViewMode && selectedGames.some((s) => gameKey(s) === gameKey(game));
+        const awayLogo = `https://a.espncdn.com/i/teamlogos/nba/500/${g.awayTricode.toLowerCase()}.png`;
+        const homeLogo = `https://a.espncdn.com/i/teamlogos/nba/500/${g.homeTricode.toLowerCase()}.png`;
         const row = document.createElement('div');
-        row.className = 'game-row' + (isFavorite ? ' favorite' : '');
+        row.className = 'game-row' + (isFavorite ? ' favorite' : '') + (isSelected ? ' selected' : '');
         row.innerHTML = `
+          <span class="select-check">${isSelected ? '✓' : ''}</span>
           <span class="matchup">
             ${isFavorite ? '<span class="fav-star">★</span>' : ''}
             <img class="team-crest" src="${awayLogo}" onerror="this.style.display='none'">
-            ${game.awayName} @ ${game.homeName}
+            ${g.awayName} @ ${g.homeName}
             <img class="team-crest" src="${homeLogo}" onerror="this.style.display='none'">
           </span>
-          <span class="status">${game.status}</span>
+          <span class="status">${g.status}</span>
         `;
-        row.addEventListener('click', () => {
-          window.courtside.openGame({
-            gameId: game.gameId,
-            awayTricode: game.awayTricode,
-            homeTricode: game.homeTricode,
-          });
-        });
+        row.addEventListener('click', () => handleGameClick(game));
         gameList.appendChild(row);
       });
     }
 
     // Premier League: deliberately no score in this data at all (see
     // getEplHomeData in main.js) — clicking a match searches within the
-    // official @premierleague YouTube channel only, never a general
+    // home club's own official YouTube channel only, never a general
     // search, so results are always official highlights.
     const eplHeading = document.getElementById('epl-heading');
     const eplList = document.getElementById('epl-list');
+    let lastEplData = { heading: '', matches: [] };
 
     function renderEplMatches(eplData) {
+      lastEplData = eplData;
       eplHeading.textContent = eplData.heading;
       eplList.innerHTML = '';
       if (eplData.matches.length === 0) {
@@ -297,9 +530,12 @@
         return;
       }
       eplData.matches.forEach((match) => {
+        const game = { league: 'epl', homeName: match.homeName, awayName: match.awayName };
+        const isSelected = multiViewMode && selectedGames.some((s) => gameKey(s) === gameKey(game));
         const row = document.createElement('div');
-        row.className = 'game-row';
+        row.className = 'game-row' + (isSelected ? ' selected' : '');
         row.innerHTML = `
+          <span class="select-check">${isSelected ? '✓' : ''}</span>
           <span class="matchup">
             <img class="team-crest" src="${match.homeCrest}" onerror="this.style.display='none'">
             ${match.homeName} v ${match.awayName}
@@ -307,9 +543,7 @@
           </span>
           <span class="status">${match.date}</span>
         `;
-        row.addEventListener('click', () => {
-          window.courtside.openEplMatch({ awayName: match.awayName, homeName: match.homeName });
-        });
+        row.addEventListener('click', () => handleGameClick(game));
         eplList.appendChild(row);
       });
     }
@@ -317,8 +551,8 @@
     showHome();
     loadHomeView();
 
-    function buildPaneCell(index, label, skipCapable) {
-      skipCapableByIndex.set(index, skipCapable);
+    function buildPaneCell(id, label, skipCapable) {
+      skipCapableById.set(id, skipCapable);
 
       const cell = document.createElement('div');
       cell.className = 'pane-cell';
@@ -340,7 +574,9 @@
       cell.innerHTML = `
         <div class="pane-label">
           <span class="pane-dot"></span>
-          <span>${label}</span>
+          <span class="label-text">${label}</span>
+          <button class="pane-action swap-btn" title="Swap this pane's game">⇄</button>
+          <button class="pane-action close-btn" title="Close this pane">✕</button>
         </div>
         ${controlsHtml}
         <div class="pane-content">
@@ -357,23 +593,36 @@
           </div>
         </div>
       `;
-      cell.querySelector('.pane-label').addEventListener('click', () => {
-        window.courtside.focusPane(index);
-      });
+      cell.querySelector('.pane-dot').addEventListener('click', () => window.courtside.focusPane(id));
+      cell.querySelector('.label-text').addEventListener('click', () => window.courtside.focusPane(id));
       cell.querySelector('.retry-btn').addEventListener('click', () => {
-        window.courtside.retryPane(index);
+        window.courtside.retryPane(id);
+      });
+      cell.querySelector('.close-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        window.courtside.closePane(id);
+      });
+      cell.querySelector('.swap-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        pendingAction = { type: 'replace', paneId: id, label };
+        multiViewMode = false;
+        selectedGames = [];
+        updateMultiViewUI();
+        updatePendingBanner();
+        showHome();
+        window.courtside.showHome();
       });
       if (skipCapable) {
         cell.querySelectorAll('.pane-controls button[data-quarter]').forEach((btn) => {
           btn.addEventListener('click', () => {
-            window.courtside.jumpToQuarter(index, Number(btn.dataset.quarter));
+            window.courtside.jumpToQuarter(id, Number(btn.dataset.quarter));
           });
         });
         cell.querySelector('.nudge-prev').addEventListener('click', () => {
-          window.courtside.nudgeQuarter(index, 'prev');
+          window.courtside.nudgeQuarter(id, 'prev');
         });
         cell.querySelector('.nudge-next').addEventListener('click', () => {
-          window.courtside.nudgeQuarter(index, 'next');
+          window.courtside.nudgeQuarter(id, 'next');
         });
       }
       return cell;
@@ -416,24 +665,45 @@
       return divider;
     }
 
+    // Rebuilding all pane-cell DOM on every config change is cheap and
+    // simple — it does NOT touch the underlying native WebContentsViews
+    // (a completely separate layer managed entirely in main.js), so
+    // panes whose content didn't change keep playing uninterrupted even
+    // though their chrome/controls get torn down and rebuilt here.
     window.courtside.onPanesConfig((panes) => {
       grid.innerHTML = '';
       cells.clear();
-      panes.forEach(({ index, label, skipCapable }) => {
-        const cell = buildPaneCell(index, label, skipCapable);
+      panes.forEach(({ id, label, skipCapable }) => {
+        const cell = buildPaneCell(id, label, skipCapable);
         grid.appendChild(cell);
-        cells.set(index, cell);
+        cells.set(id, cell);
       });
+      paneCount = panes.length;
+      applyGridDisplayMode();
       if (panes.length === 2) {
-        const [cellA, cellB] = [cells.get(panes[0].index), cells.get(panes[1].index)];
+        const [cellA, cellB] = [cells.get(panes[0].id), cells.get(panes[1].id)];
         cellA.style.flex = `0 0 ${splitRatio * 100}%`;
         cellB.style.flex = `0 0 ${(1 - splitRatio) * 100}%`;
         grid.insertBefore(buildDivider(cellA, cellB), cellB);
+      } else if (panes.length >= 3) {
+        // Mirrors layoutPanes' row/col math in main.js exactly: 2
+        // columns, wrapping rows, and a lone last-row pane (3-pane
+        // case) spans the full width instead of leaving a gap.
+        const cols = 2;
+        panes.forEach(({ id }, i) => {
+          const cell = cells.get(id);
+          const row = Math.floor(i / cols);
+          const col = i % cols;
+          const colsInRow = Math.min(cols, panes.length - row * cols);
+          cell.style.gridRow = `${row + 1} / span 1`;
+          cell.style.gridColumn = colsInRow === 1 ? '1 / -1' : `${col + 1} / span 1`;
+        });
       }
+      updateAddPaneVisibility();
     });
 
-    window.courtside.onPaneStatus(({ index, state, message }) => {
-      const cell = cells.get(index);
+    window.courtside.onPaneStatus(({ id, state, message }) => {
+      const cell = cells.get(id);
       if (!cell) return;
       cell.querySelector('.skeleton').style.display = state === 'loading' ? 'flex' : 'none';
       const errorEl = cell.querySelector('.error-state');
@@ -443,9 +713,9 @@
       }
     });
 
-    window.courtside.onFocusChanged(({ index }) => {
-      cells.forEach((cell, i) => {
-        cell.classList.toggle('focused', i === index);
+    window.courtside.onFocusChanged(({ id }) => {
+      cells.forEach((cell, cellId) => {
+        cell.classList.toggle('focused', cellId === id);
       });
     });
 
@@ -455,9 +725,9 @@
     // quarter that hasn't happened yet is meaningless), matching the
     // v1 scope decision that Q2/Q4 are a coarse hint requiring the
     // nudge buttons, not a guaranteed-precise jump.
-    window.courtside.onPaneSkipState(({ index, ready, reason }) => {
-      const cell = cells.get(index);
-      if (!cell || !skipCapableByIndex.get(index)) return;
+    window.courtside.onPaneSkipState(({ id, ready, reason }) => {
+      const cell = cells.get(id);
+      if (!cell || !skipCapableById.get(id)) return;
       cell.querySelectorAll('.pane-controls button').forEach((btn) => {
         btn.disabled = !ready;
       });
