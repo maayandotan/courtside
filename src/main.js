@@ -435,7 +435,15 @@ function createWindow() {
   // what's in a pane.
   const paneConfigs = [
     { url: 'https://www.nba.com/watch', label: 'League Pass', skipCapable: true },
-    { url: 'https://www.dazn.com', label: 'DAZN (test)', skipCapable: false },
+    {
+      // A specific free replay fixture, used as the default so there's
+      // always something playable without hunting through DAZN's own
+      // browse UI first — same reasoning as League Pass loading
+      // nba.com/watch rather than the bare homepage.
+      url: 'https://www.dazn.com/en-IL/fixture/ContentId:dn9kqyqgul5f1r43q6g544pka/dn9kqyqgul5f1r43q6g544pka/1ujtefonry54h1a95az9ifbplq',
+      label: 'DAZN (test)',
+      skipCapable: false,
+    },
   ];
 
   let splitRatio = 0.5;
@@ -507,6 +515,16 @@ function createWindow() {
   globalShortcut.register('CommandOrControl+Shift+L', () => {
     const skip = focusedSkip();
     if (skip) skip.dumpTable();
+  });
+
+  // Cmd+Shift+U: log the focused pane's current URL — handy for finding
+  // deep-link URLs on a service by navigating manually, then reading
+  // out what page you landed on (same pattern used to find League
+  // Pass's game URLs earlier).
+  globalShortcut.register('CommandOrControl+Shift+U', () => {
+    const pane = panes[focusedIndex];
+    if (!pane) return;
+    console.log(`pane ${focusedIndex} URL:`, pane.view.webContents.getURL());
   });
 
   // Q3 lands reliably (validated across many real games — see README).
