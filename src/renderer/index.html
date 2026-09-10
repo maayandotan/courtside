@@ -203,6 +203,8 @@
   .pane-controls button:disabled { color: var(--muted); cursor: not-allowed; opacity: 0.5; }
   .pane-controls .nudge { margin-left: auto; }
   .pane-controls .skip-status { font-size: 11px; color: var(--muted); margin-left: auto; }
+  .pane-controls button.recap-active { background: var(--accent); cursor: default; }
+  .pane-controls button.locked { display: flex; align-items: center; gap: 4px; }
 
   .pane-content { position: relative; flex: 1 1 auto; }
   .skeleton, .error-state {
@@ -275,6 +277,9 @@
 
     <div class="home-heading" id="cl-heading" style="margin-top: 32px;">Loading&hellip;</div>
     <div class="game-list" id="cl-list"></div>
+
+    <div class="home-heading" id="nfl-heading" style="margin-top: 32px;">Loading&hellip;</div>
+    <div class="game-list" id="nfl-list"></div>
 
     <div class="watch-selected-bar" id="watch-selected-bar">
       <button class="watch-selected-btn" id="watch-selected-btn" disabled>Watch Selected (0)</button>
@@ -381,12 +386,13 @@
     let favoriteTeam = null;
 
     async function loadHomeView() {
-      const [teams, savedFavorite, homeData, eplData, clData] = await Promise.all([
+      const [teams, savedFavorite, homeData, eplData, clData, nflData] = await Promise.all([
         window.courtside.getTeams(),
         window.courtside.getFavoriteTeam(),
         window.courtside.getHomeData(),
         window.courtside.getEplHomeData(),
         window.courtside.getClHomeData(),
+        window.courtside.getNflHomeData(),
       ]);
       favoriteTeam = savedFavorite;
       favoriteSelect.innerHTML = '<option value="">None</option>' +
@@ -395,6 +401,7 @@
       renderGames(homeData);
       renderEplMatches(eplData);
       renderClMatches(clData);
+      renderNflMatches(nflData);
     }
 
     favoriteSelect.addEventListener('change', () => {
@@ -423,6 +430,7 @@
         renderGames(lastHomeData);
         renderEplMatches(lastEplData);
         renderClMatches(lastClData);
+        renderNflMatches(lastNflData);
         updateWatchSelectedUI();
         return;
       }
@@ -457,6 +465,7 @@
       gameList.classList.toggle('multi-view-on', multiViewMode);
       eplList.classList.toggle('multi-view-on', multiViewMode);
       clList.classList.toggle('multi-view-on', multiViewMode);
+      nflList.classList.toggle('multi-view-on', multiViewMode);
       updateWatchSelectedUI();
     }
     function updateWatchSelectedUI() {
@@ -473,6 +482,7 @@
       renderGames(lastHomeData);
       renderEplMatches(lastEplData);
       renderClMatches(lastClData);
+      renderNflMatches(lastNflData);
     });
     watchSelectedBtn.addEventListener('click', () => {
       if (selectedGames.length === 0) return;
@@ -594,17 +604,59 @@
       });
     }
 
+    // NFL: clicking a game opens DAZN's Game Pass schedule and scripts
+    // a click into the matched game card, then into its free "Short
+    // Highlights" option specifically (Ad-Free Replay/Full Replay/Game
+    // in 40 all require an NFL Game Pass subscription this app never
+    // tries to unlock). No score shown, same pattern as NBA/EPL/CL.
+    const nflHeading = document.getElementById('nfl-heading');
+    const nflList = document.getElementById('nfl-list');
+    let lastNflData = { heading: '', matches: [] };
+
+    function renderNflMatches(nflData) {
+      lastNflData = nflData;
+      nflHeading.textContent = nflData.heading;
+      nflList.innerHTML = '';
+      if (nflData.matches.length === 0) {
+        nflList.innerHTML = '<div class="home-empty">No games to show right now.</div>';
+        return;
+      }
+      nflData.matches.forEach((match) => {
+        const game = { league: 'nfl', homeName: match.homeName, awayName: match.awayName };
+        const isSelected = multiViewMode && selectedGames.some((s) => gameKey(s) === gameKey(game));
+        const row = document.createElement('div');
+        row.className = 'game-row' + (isSelected ? ' selected' : '');
+        row.innerHTML = `
+          <span class="select-check">${isSelected ? '✓' : ''}</span>
+          <span class="matchup">
+            <img class="team-crest" src="${match.awayCrest}" onerror="this.style.display='none'">
+            ${match.awayName} @ ${match.homeName}
+            <img class="team-crest" src="${match.homeCrest}" onerror="this.style.display='none'">
+          </span>
+          <span class="status">${match.date}</span>
+        `;
+        row.addEventListener('click', () => handleGameClick(game));
+        nflList.appendChild(row);
+      });
+    }
+
     showHome();
     loadHomeView();
 
-    function buildPaneCell(id, label, skipCapable) {
+    function buildPaneCell(id, label, skipCapable, league) {
       skipCapableById.set(id, skipCapable);
 
       const cell = document.createElement('div');
       cell.className = 'pane-cell';
 
-      const controlsHtml = skipCapable
-        ? `
+      // NFL panes land on DAZN's free "Short Highlights" for the game
+      // (no subscription needed) — Ad-Free Replay/Full Replay/Game in
+      // 40 all require an NFL Game Pass subscription this app never
+      // tries to unlock, so "Full Game" is shown locked rather than
+      // omitted, matching DAZN's own UI for those same options.
+      let controlsHtml;
+      if (skipCapable) {
+        controlsHtml = `
           <div class="pane-controls">
             <button data-quarter="1" disabled>Q1</button>
             <button data-quarter="2" disabled>Q2</button>
@@ -614,8 +666,17 @@
             <button class="nudge-prev" disabled>&lsaquo;</button>
             <button class="nudge-next" disabled>&rsaquo;</button>
           </div>
-        `
-        : `<div class="pane-controls"></div>`;
+        `;
+      } else if (league === 'nfl') {
+        controlsHtml = `
+          <div class="pane-controls">
+            <button class="recap-active" disabled>Recap</button>
+            <button class="locked" disabled title="Requires an NFL Game Pass subscription">🔒 Full Game</button>
+          </div>
+        `;
+      } else {
+        controlsHtml = `<div class="pane-controls"></div>`;
+      }
 
       cell.innerHTML = `
         <div class="pane-label">
@@ -719,8 +780,8 @@
     window.courtside.onPanesConfig((panes) => {
       grid.innerHTML = '';
       cells.clear();
-      panes.forEach(({ id, label, skipCapable }) => {
-        const cell = buildPaneCell(id, label, skipCapable);
+      panes.forEach(({ id, label, skipCapable, league }) => {
+        const cell = buildPaneCell(id, label, skipCapable, league);
         grid.appendChild(cell);
         cells.set(id, cell);
       });

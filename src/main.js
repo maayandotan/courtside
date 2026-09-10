@@ -10,7 +10,7 @@ const PANE_MARGIN = 2;
 
 // Text to search for with the Cmd+Shift+D DOM-scan hotkey (see its
 // registration below) — edit and rebuild per investigation.
-const DOM_SCAN_QUERY = 'Man City';
+const DOM_SCAN_QUERY = 'Short Highlights';
 
 // Parses an HLS media playlist into the VOD-timeline offset of every
 // #EXT-X-DISCONTINUITY marker (broadcast structural boundaries — timeouts,
@@ -526,63 +526,124 @@ const EPL_SEARCH_SCRIPT = (query) => `
 // itself was blind to most of the page, not just slow. deepQueryAll
 // walks light DOM AND every nested shadow root to build one real
 // element list to search over.
+// Shared by every league's highlight-finding script (CL, NFL, ...):
+// walks light DOM AND every nested shadow root (plain querySelectorAll/
+// textContent see neither — confirmed on UEFA's Stencil-built site, and
+// worth assuming on any modern site until proven otherwise), and finds
+// the SMALLEST element whose deep text contains every given substring.
+// Memoized bottom-up per call — computing each element's text once and
+// letting ancestors reuse it — since recomputing a fresh deep-text walk
+// per comparison is effectively O(n^2) and, on a heavy page, may never
+// complete a single pass inside a retry loop at all (this is what
+// "Champions League takes forever" actually turned out to be).
+const SHADOW_DOM_SEARCH_HELPERS_JS = `
+  function collectWithShadow(root, out) {
+    root.querySelectorAll('*').forEach((el) => {
+      out.push(el);
+      if (el.shadowRoot) collectWithShadow(el.shadowRoot, out);
+    });
+  }
+  function findSmallestTextMatch(...needles) {
+    const all = [];
+    collectWithShadow(document, all);
+    const cache = new WeakMap();
+    function ownText(el) {
+      if (cache.has(el)) return cache.get(el);
+      let text = '';
+      el.childNodes.forEach((n) => {
+        if (n.nodeType === Node.TEXT_NODE) text += n.textContent;
+        else if (n.nodeType === Node.ELEMENT_NODE) text += ownText(n);
+      });
+      if (el.shadowRoot) text += ownText(el.shadowRoot);
+      cache.set(el, text);
+      return text;
+    }
+    let best = null;
+    let bestLen = Infinity;
+    for (const el of all) {
+      const text = ownText(el);
+      if (text.length < bestLen && needles.every((n) => text.includes(n))) {
+        best = el;
+        bestLen = text.length;
+      }
+    }
+    return best;
+  }
+  function nearestClickable(el) {
+    const descendants = [];
+    collectWithShadow(el, descendants);
+    const inside = descendants.find((d) => ['BUTTON', 'A', 'VIDEO', 'IMG'].includes(d.tagName) || d.getAttribute('role') === 'button');
+    if (inside) return inside;
+    let node = el;
+    while (node && node.tagName !== 'BUTTON' && node.tagName !== 'A' && !(node.getAttribute && node.getAttribute('role') === 'button')) {
+      node = node.parentElement;
+    }
+    return node || el;
+  }
+  // A plain HTMLElement.click() only fires a 'click' event — confirmed
+  // insufficient on DAZN's UI, where option rows are plain divs with
+  // no button/link/role at all (found via a live DOM scan), meaning
+  // React most likely wires them up via pointer/mouse events rather
+  // than a delegated click. Fires the fuller, bubbling sequence a real
+  // mouse interaction produces so either kind of handler catches it.
+  function fireClick(el) {
+    const rect = el.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y };
+    ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((type) => {
+      const EventCtor = type.startsWith('pointer') ? PointerEvent : MouseEvent;
+      el.dispatchEvent(new EventCtor(type, opts));
+    });
+  }
+`;
+
 const CL_HIGHLIGHT_SCRIPT = (homeName, awayName) => `
   (async () => {
-    function collectWithShadow(root, out) {
-      root.querySelectorAll('*').forEach((el) => {
-        out.push(el);
-        if (el.shadowRoot) collectWithShadow(el.shadowRoot, out);
-      });
-    }
-
-    // Finds the smallest element whose deep text (light DOM + all
-    // nested shadow roots — plain textContent sees neither on this
-    // Stencil-built site) contains both team names. Memoized bottom-up
-    // per call so each element's text is computed once and reused by
-    // its ancestors — the earlier version recomputed a fresh deep-text
-    // walk for every one of thousands of elements on every comparison
-    // (effectively O(n^2)), which on a page this heavy likely never
-    // finished a single pass inside the retry loop at all — a much
-    // simpler explanation for "takes forever" than anything about the
-    // site itself.
-    function findSmallestMatch() {
-      const all = [];
-      collectWithShadow(document, all);
-      const cache = new WeakMap();
-      function ownText(el) {
-        if (cache.has(el)) return cache.get(el);
-        let text = '';
-        el.childNodes.forEach((n) => {
-          if (n.nodeType === Node.TEXT_NODE) text += n.textContent;
-          else if (n.nodeType === Node.ELEMENT_NODE) text += ownText(n);
-        });
-        if (el.shadowRoot) text += ownText(el.shadowRoot);
-        cache.set(el, text);
-        return text;
-      }
-      let best = null;
-      let bestLen = Infinity;
-      for (const el of all) {
-        const text = ownText(el);
-        if (text.length < bestLen && text.includes(${JSON.stringify(homeName)}) && text.includes(${JSON.stringify(awayName)})) {
-          best = el;
-          bestLen = text.length;
-        }
-      }
-      return best;
-    }
-
+    ${SHADOW_DOM_SEARCH_HELPERS_JS}
     const deadline = Date.now() + 15000;
     let matchEl = null;
     while (Date.now() < deadline && !matchEl) {
-      matchEl = findSmallestMatch();
+      matchEl = findSmallestTextMatch(${JSON.stringify(homeName)}, ${JSON.stringify(awayName)});
       if (!matchEl) await new Promise((r) => setTimeout(r, 500));
     }
     if (!matchEl) return { ok: false, reason: 'match card not found', searchedFor: [${JSON.stringify(homeName)}, ${JSON.stringify(awayName)}] };
-    const clickable = [];
-    collectWithShadow(matchEl, clickable);
-    const target = clickable.find((el) => ['BUTTON', 'A', 'VIDEO', 'IMG'].includes(el.tagName) || el.getAttribute('role') === 'button') || matchEl;
-    target.click();
+    fireClick(nearestClickable(matchEl));
+    return { ok: true };
+  })()
+`;
+
+// NFL Game Pass on DAZN: a single fixed schedule page lists every game
+// (no per-date URL like Champions League needed), so LEAGUE_PROVIDERS.
+// nfl always points at the same URL. DAZN shows team NICKNAMES only
+// ("Patriots @ Seahawks") — confirmed live — which for the NFL
+// (unlike soccer) is reliably just the last word of the full team name
+// for all 32 teams, so this needs no per-team alias map the way
+// Champions League did. Clicking the matched game card opens a panel
+// with four options (Short Highlights, Ad-Free Replay, Full Replay,
+// Game in 40) — only "Short Highlights" is free without an NFL Game
+// Pass subscription, so this specifically finds and clicks that exact
+// label rather than the card's default action.
+const NFL_HIGHLIGHT_SCRIPT = (awayNick, homeNick) => `
+  (async () => {
+    ${SHADOW_DOM_SEARCH_HELPERS_JS}
+    const cardDeadline = Date.now() + 15000;
+    let cardEl = null;
+    while (Date.now() < cardDeadline && !cardEl) {
+      cardEl = findSmallestTextMatch(${JSON.stringify(awayNick)}, ${JSON.stringify(homeNick)});
+      if (!cardEl) await new Promise((r) => setTimeout(r, 500));
+    }
+    if (!cardEl) return { ok: false, reason: 'game card not found', searchedFor: [${JSON.stringify(awayNick)}, ${JSON.stringify(homeNick)}] };
+    fireClick(nearestClickable(cardEl));
+
+    const panelDeadline = Date.now() + 10000;
+    let highlightsEl = null;
+    while (Date.now() < panelDeadline && !highlightsEl) {
+      highlightsEl = findSmallestTextMatch('Short Highlights');
+      if (!highlightsEl) await new Promise((r) => setTimeout(r, 400));
+    }
+    if (!highlightsEl) return { ok: false, reason: 'Short Highlights option not found after opening game card' };
+    fireClick(nearestClickable(highlightsEl));
     return { ok: true };
   })()
 `;
@@ -960,6 +1021,36 @@ async function getClHomeData(view) {
   }
 }
 
+async function getNflHomeData(view) {
+  try {
+    const end = new Date();
+    const start = new Date(end.getTime() - 10 * 24 * 60 * 60 * 1000);
+    const fmt = (d) => d.toISOString().slice(0, 10).replace(/-/g, '');
+    const url = `https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates=${fmt(start)}-${fmt(end)}`;
+    const text = await fetchViaPage(view, url);
+    const data = JSON.parse(text);
+    const completed = (data.events || []).filter(
+      (ev) => ev.competitions?.[0]?.status?.type?.name === 'STATUS_FINAL'
+    );
+    const matches = completed.slice(-16).reverse().map((ev) => {
+      const comp = ev.competitions[0];
+      const home = comp.competitors.find((c) => c.homeAway === 'home');
+      const away = comp.competitors.find((c) => c.homeAway === 'away');
+      return {
+        homeName: home.team.displayName,
+        awayName: away.team.displayName,
+        homeCrest: home.team.logo,
+        awayCrest: away.team.logo,
+        date: ev.date.slice(0, 10),
+      };
+    });
+    return { heading: 'NFL — recent games', matches };
+  } catch (e) {
+    console.error('getNflHomeData failed:', e.message);
+    return { heading: 'NFL — unavailable', matches: [] };
+  }
+}
+
 // ESPN's team names don't match UEFA's own site names (confirmed live:
 // searched for "FC Porto"/"Manchester City" against a page showing
 // "Porto"/"Man City" — a real, understood mismatch, not a guess). Two
@@ -992,6 +1083,21 @@ function normalizeClForSearch(name) {
   if (CL_CLUB_NAME_ALIASES[name]) return CL_CLUB_NAME_ALIASES[name];
   return name.replace(CL_CLUB_PREFIX_STRIP, '').replace(CL_CLUB_SUFFIX_STRIP, '');
 }
+
+// DAZN's NFL Game Pass schedule shows team nicknames only ("Patriots @
+// Seahawks", confirmed live) — unlike soccer club nicknames (which
+// need a per-club alias map, see above), every NFL team's nickname is
+// reliably just the last word of its full name, so this needs no
+// lookup table at all.
+function nflNickname(fullName) {
+  return fullName.split(' ').pop();
+}
+
+// NFL Game Pass on DAZN lists every game on one fixed schedule page
+// (no per-date URL, unlike Champions League) — the id in the URL is
+// this specific competition instance for the 2026 season, found by
+// the user navigating the real site; not derivable from anything else.
+const DAZN_NFL_SCHEDULE_URL = 'https://www.dazn.com/en-IL/competition/Competition:wy3kluvb4efae1of0d8146c1?tab=previous-events';
 
 // One dispatch table per league: resolve() turns a generic game
 // descriptor ({ league, ...fields }, sent from the renderer) into what a
@@ -1031,6 +1137,15 @@ const LEAGUE_PROVIDERS = {
       };
     },
   },
+  nfl: {
+    resolve(game) {
+      return {
+        url: DAZN_NFL_SCHEDULE_URL,
+        skipCapable: false,
+        label: `${game.awayName} @ ${game.homeName}`,
+      };
+    },
+  },
 };
 
 // Does whatever's needed after a pane has been pointed at a resolved
@@ -1066,6 +1181,13 @@ function openGameContent(win, pane, game, resolved, layoutAll) {
     // visible for a few seconds during this automation.
     initialDelayMs = 2500;
     hideDuringScript = false;
+  } else if (game.league === 'nfl') {
+    script = NFL_HIGHLIGHT_SCRIPT(nflNickname(game.awayName), nflNickname(game.homeName));
+    initialDelayMs = 2500;
+    // Same lesson learned from Champions League, applied from the
+    // start this time: don't hide a pane running a scripted search on
+    // a heavy modern SPA — it gets throttled like a background tab and
+    // may never finish rendering.
     hideDuringScript = false;
   }
   if (!script) return;
@@ -1175,7 +1297,7 @@ function createWindow() {
   const broadcastPanesConfig = () => {
     win.webContents.send(
       'panes-config',
-      panes.map((p) => ({ id: p.id, label: p.label, skipCapable: !!p.skip }))
+      panes.map((p) => ({ id: p.id, label: p.label, skipCapable: !!p.skip, league: p.league }))
     );
   };
 
@@ -1306,6 +1428,7 @@ function createWindow() {
   ipcMain.on('set-favorite-team', (_event, tricode) => saveFavoriteTeam(tricode));
   ipcMain.handle('get-epl-home-data', () => getEplHomeData(utilityViewEpl));
   ipcMain.handle('get-cl-home-data', () => getClHomeData(utilityViewNba));
+  ipcMain.handle('get-nfl-home-data', () => getNflHomeData(utilityViewNba));
 
   // Plain click on the home page (multi-view off): opens exactly the
   // games pressed, discarding whatever grid existed before. Also used
@@ -1411,10 +1534,29 @@ function createWindow() {
             return text;
           }
           const query = ${JSON.stringify(DOM_SCAN_QUERY)};
+          // Also walk up a few ancestors from the smallest match — the
+          // real click handler is often on a wrapper a few levels up,
+          // not the text element itself (confirmed relevant: an NFL
+          // highlight-script click that reported success but didn't
+          // navigate anywhere, meaning it clicked the wrong thing).
+          function ancestorChain(el, depth) {
+            const chain = [];
+            let node = el;
+            for (let i = 0; i < depth && node; i++) {
+              chain.push({
+                tag: node.tagName,
+                className: typeof node.className === 'string' ? node.className.slice(0, 80) : null,
+                role: node.getAttribute && node.getAttribute('role'),
+                onclickAttr: node.getAttribute && node.getAttribute('onclick'),
+              });
+              node = node.parentElement || (node.getRootNode && node.getRootNode().host) || null;
+            }
+            return chain;
+          }
           const matches = deepQueryAll(document)
             .filter((el) => deepText(el).includes(query))
             .sort((a, b) => deepText(a).length - deepText(b).length)
-            .slice(0, 20)
+            .slice(0, 10)
             .map((el) => ({
               tag: el.tagName,
               id: el.id || null,
@@ -1422,6 +1564,7 @@ function createWindow() {
               role: el.getAttribute('role'),
               ariaLabel: el.getAttribute('aria-label'),
               text: deepText(el).trim().slice(0, 60),
+              ancestors: ancestorChain(el, 6),
             }));
           // Match content could be embedded inside a same-origin iframe
           // (invisible to any document-based walk, shadow-DOM-aware or
@@ -1439,6 +1582,51 @@ function createWindow() {
       console.log(`DOM scan for "${DOM_SCAN_QUERY}":`, JSON.stringify(result, null, 2));
     } catch (err) {
       console.error('DOM scan failed:', err);
+    }
+  });
+
+  // Inspects the SHELL's own layout (the renderer's chrome — grid,
+  // pane-cell, pane-label, pane-controls — not a pane's page content).
+  // Runs against win.webContents specifically, not a pane's, since the
+  // grid/label/controls elements live in index.html, not inside any
+  // embedded page.
+  globalShortcut.register('CommandOrControl+Shift+G', async () => {
+    try {
+      const result = await win.webContents.executeJavaScript(`
+        (() => {
+          const rect = (el) => el ? { x: Math.round(el.getBoundingClientRect().x), y: Math.round(el.getBoundingClientRect().y), width: Math.round(el.getBoundingClientRect().width), height: Math.round(el.getBoundingClientRect().height) } : null;
+          const grid = document.getElementById('grid');
+          const cells = Array.from(document.querySelectorAll('.pane-cell'));
+          return {
+            windowInnerSize: { width: window.innerWidth, height: window.innerHeight },
+            bodyBackground: getComputedStyle(document.body).backgroundColor,
+            grid: {
+              rect: rect(grid),
+              display: grid ? getComputedStyle(grid).display : null,
+              gridTemplateRows: grid ? getComputedStyle(grid).gridTemplateRows : null,
+              gridTemplateColumns: grid ? getComputedStyle(grid).gridTemplateColumns : null,
+            },
+            cells: cells.map((cell, i) => {
+              const label = cell.querySelector('.pane-label');
+              const controls = cell.querySelector('.pane-controls');
+              const content = cell.querySelector('.pane-content');
+              return {
+                index: i,
+                cellRect: rect(cell),
+                cellGridRow: getComputedStyle(cell).gridRow,
+                cellGridColumn: getComputedStyle(cell).gridColumn,
+                cellFlex: getComputedStyle(cell).flex,
+                labelRect: rect(label),
+                controlsRect: rect(controls),
+                contentRect: rect(content),
+              };
+            }),
+          };
+        })()
+      `);
+      console.log('Shell layout scan:', JSON.stringify(result, null, 2));
+    } catch (err) {
+      console.error('Shell layout scan failed:', err);
     }
   });
 
