@@ -10,7 +10,7 @@ const PANE_MARGIN = 2;
 
 // Text to search for with the Cmd+Shift+D DOM-scan hotkey (see its
 // registration below) — edit and rebuild per investigation.
-const DOM_SCAN_QUERY = 'Sep';
+const DOM_SCAN_QUERY = 'Man City';
 
 // Parses an HLS media playlist into the VOD-timeline offset of every
 // #EXT-X-DISCONTINUITY marker (broadcast structural boundaries — timeouts,
@@ -356,7 +356,19 @@ function layoutPanes(win, panes, splitRatio) {
 
   panes.forEach((pane, i) => {
     if (!pane.ready) {
-      pane.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+      if (pane.autoNavigating) {
+        // A genuinely zero-area view gets throttled by Chromium the
+        // same way a background tab does (reduced timer/rendering
+        // rate) — fine for a plain "still loading" skeleton, but
+        // actively counterproductive for a scripted navigation that's
+        // waiting on a heavy page to finish hydrating: hiding it this
+        // way was likely making Champions League's slow page even
+        // slower. Give it real dimensions, just moved off-screen, so
+        // it renders at full speed while still being invisible.
+        pane.view.setBounds({ x: -width - 100, y: 0, width, height: height - HEADER_HEIGHT });
+      } else {
+        pane.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+      }
       return;
     }
     const col = i % cols;
@@ -922,7 +934,14 @@ async function getClHomeData(view) {
     const completed = (data.events || []).filter(
       (ev) => ev.competitions?.[0]?.status?.type?.name === 'STATUS_FULL_TIME'
     );
-    const matches = completed.slice(-6).reverse().map((ev) => {
+    // Show the whole current matchday, not an arbitrary "last N" count
+    // — UCL plays ~18 games over 2-3 nights per matchday, so capping at
+    // 6 (the NBA/EPL "last few games" convention) cut off earlier
+    // nights of the SAME matchday as later ones finished. ESPN doesn't
+    // expose an explicit matchday number here, but matchdays are
+    // spaced about a month apart, so the 10-day lookback window above
+    // naturally never spans more than one matchday anyway.
+    const matches = completed.slice(-20).reverse().map((ev) => {
       const comp = ev.competitions[0];
       const home = comp.competitors.find((c) => c.homeAway === 'home');
       const away = comp.competitors.find((c) => c.homeAway === 'away');
@@ -939,6 +958,39 @@ async function getClHomeData(view) {
     console.error('getClHomeData failed:', e.message);
     return { heading: 'Champions League — unavailable', matches: [] };
   }
+}
+
+// ESPN's team names don't match UEFA's own site names (confirmed live:
+// searched for "FC Porto"/"Manchester City" against a page showing
+// "Porto"/"Man City" — a real, understood mismatch, not a guess). Two
+// independent fixes, since one alone doesn't cover both cases: (1) a
+// generic prefix strip handles "FC Porto" -> "Porto" for any club
+// without needing to know it by name; (2) "Manchester" -> "Man" is a
+// genuine abbreviation, not an affix, so it needs an explicit alias —
+// only added for cases actually confirmed (Man City) or extremely
+// well-known/unambiguous (Man Utd, PSG's "Paris" branding, seen on
+// UEFA's own video hub) rather than guessing at all ~36 clubs' UEFA
+// house style up front. Grow this list the same way EPL's handle map
+// grew: when a real match fails, the highlight script's failure log
+// now includes exactly what was searched for, so extending this is a
+// one-line lookup, not a guess.
+const CL_CLUB_NAME_ALIASES = {
+  'Manchester City': 'Man City', // confirmed live via automation success
+  'Manchester United': 'Man Utd', // not yet confirmed, common convention
+  'Paris Saint-Germain': 'Paris', // confirmed via user screenshot
+  'Borussia Dortmund': 'B. Dortmund', // confirmed via automation failure log
+  'Slovan Bratislava': 'S. Bratislava', // confirmed via user screenshot
+  Internazionale: 'Inter', // confirmed via user screenshot
+  'Inter Milan': 'Inter', // same club, defensive alt spelling ESPN may use
+  'LASK Linz': 'LASK', // confirmed via user screenshot
+  'Feyenoord Rotterdam': 'Feyenoord', // confirmed via automation failure log
+};
+const CL_CLUB_PREFIX_STRIP = /^(FC|AC|AS|CF|SC|SV|SL|1\.\s?FC)\s+/i;
+const CL_CLUB_SUFFIX_STRIP = /\s+(FK|FC|CF|SC)$/i;
+
+function normalizeClForSearch(name) {
+  if (CL_CLUB_NAME_ALIASES[name]) return CL_CLUB_NAME_ALIASES[name];
+  return name.replace(CL_CLUB_PREFIX_STRIP, '').replace(CL_CLUB_SUFFIX_STRIP, '');
 }
 
 // One dispatch table per league: resolve() turns a generic game
@@ -996,19 +1048,31 @@ function openGameContent(win, pane, game, resolved, layoutAll) {
   // page never flashes on screen.
   let script = null;
   let initialDelayMs = 500;
+  let hideDuringScript = true;
   if (game.league === 'epl') {
     script = EPL_SEARCH_SCRIPT(resolved.searchQuery);
   } else if (game.league === 'cl') {
-    script = CL_HIGHLIGHT_SCRIPT(game.homeName, game.awayName);
+    script = CL_HIGHLIGHT_SCRIPT(normalizeClForSearch(game.homeName), normalizeClForSearch(game.awayName));
     // UEFA's fixtures page ships a much heavier JS bundle than
-    // YouTube's — confirmed live it needs noticeably longer to finish
-    // rendering.
+    // YouTube's and needs noticeably longer to finish rendering.
+    // Confirmed live: hiding it (whether zeroed to 0x0 or moved
+    // off-screen at real size) made the page consistently fail to
+    // finish hydrating within any reasonable deadline, while leaving
+    // it genuinely visible let the same search succeed reliably —
+    // Electron/Chromium's occlusion-based throttling most likely
+    // checks actual screen visibility, not just element size, so
+    // moving it off-screen never actually avoided the throttling.
+    // Tradeoff accepted: the fixtures page (with scores) is genuinely
+    // visible for a few seconds during this automation.
     initialDelayMs = 2500;
+    hideDuringScript = false;
+    hideDuringScript = false;
   }
   if (!script) return;
 
-  pane.autoNavigating = true;
+  if (hideDuringScript) pane.autoNavigating = true;
   const reveal = () => {
+    if (!hideDuringScript) return; // already visible/revealed normally
     pane.autoNavigating = false;
     pane.ready = true;
     win.webContents.send('pane-status', { id: pane.id, state: 'ready' });
@@ -1359,7 +1423,17 @@ function createWindow() {
               ariaLabel: el.getAttribute('aria-label'),
               text: deepText(el).trim().slice(0, 60),
             }));
-          return matches;
+          // Match content could be embedded inside a same-origin iframe
+          // (invisible to any document-based walk, shadow-DOM-aware or
+          // not — crossing into a different document needs
+          // contentDocument specifically). Report iframes so this scan
+          // also answers that question in one pass.
+          const iframes = Array.from(document.querySelectorAll('iframe')).map((f) => {
+            let reachableText = null;
+            try { reachableText = (f.contentDocument && f.contentDocument.body ? f.contentDocument.body.innerText : null); } catch (e) { reachableText = 'CROSS_ORIGIN_BLOCKED'; }
+            return { src: f.src, hasReachableText: reachableText != null, reachableTextIncludesQuery: reachableText ? reachableText.includes(query) : null };
+          });
+          return { matches, iframes };
         })()
       `);
       console.log(`DOM scan for "${DOM_SCAN_QUERY}":`, JSON.stringify(result, null, 2));
