@@ -281,6 +281,9 @@
     <div class="home-heading" id="nfl-heading" style="margin-top: 32px;">Loading&hellip;</div>
     <div class="game-list" id="nfl-list"></div>
 
+    <div class="home-heading" id="el-heading" style="margin-top: 32px;">Loading&hellip;</div>
+    <div class="game-list" id="el-list"></div>
+
     <div class="watch-selected-bar" id="watch-selected-bar">
       <button class="watch-selected-btn" id="watch-selected-btn" disabled>Watch Selected (0)</button>
     </div>
@@ -386,13 +389,14 @@
     let favoriteTeam = null;
 
     async function loadHomeView() {
-      const [teams, savedFavorite, homeData, eplData, clData, nflData] = await Promise.all([
+      const [teams, savedFavorite, homeData, eplData, clData, nflData, elData] = await Promise.all([
         window.courtside.getTeams(),
         window.courtside.getFavoriteTeam(),
         window.courtside.getHomeData(),
         window.courtside.getEplHomeData(),
         window.courtside.getClHomeData(),
         window.courtside.getNflHomeData(),
+        window.courtside.getEuroLeagueHomeData(),
       ]);
       favoriteTeam = savedFavorite;
       favoriteSelect.innerHTML = '<option value="">None</option>' +
@@ -402,6 +406,7 @@
       renderEplMatches(eplData);
       renderClMatches(clData);
       renderNflMatches(nflData);
+      renderElMatches(elData);
     }
 
     favoriteSelect.addEventListener('change', () => {
@@ -431,6 +436,7 @@
         renderEplMatches(lastEplData);
         renderClMatches(lastClData);
         renderNflMatches(lastNflData);
+        renderElMatches(lastElData);
         updateWatchSelectedUI();
         return;
       }
@@ -466,6 +472,7 @@
       eplList.classList.toggle('multi-view-on', multiViewMode);
       clList.classList.toggle('multi-view-on', multiViewMode);
       nflList.classList.toggle('multi-view-on', multiViewMode);
+      elList.classList.toggle('multi-view-on', multiViewMode);
       updateWatchSelectedUI();
     }
     function updateWatchSelectedUI() {
@@ -483,6 +490,7 @@
       renderEplMatches(lastEplData);
       renderClMatches(lastClData);
       renderNflMatches(lastNflData);
+      renderElMatches(lastElData);
     });
     watchSelectedBtn.addEventListener('click', () => {
       if (selectedGames.length === 0) return;
@@ -637,6 +645,50 @@
         `;
         row.addEventListener('click', () => handleGameClick(game));
         nflList.appendChild(row);
+      });
+    }
+
+    // EuroLeague: clicking a match opens the league's single official
+    // YouTube channel (unlike EPL's per-club channels) and scripts the
+    // same search-and-click used there. homeShort/awayShort are
+    // EuroLeague's own short display names ("Barca", "Partizan"),
+    // carried straight through as part of the game descriptor since
+    // they're closer to real video-title wording than the full club
+    // names — avoids needing a guessed alias map at all.
+    const elHeading = document.getElementById('el-heading');
+    const elList = document.getElementById('el-list');
+    let lastElData = { heading: '', matches: [] };
+
+    function renderElMatches(elData) {
+      lastElData = elData;
+      elHeading.textContent = elData.heading;
+      elList.innerHTML = '';
+      if (elData.matches.length === 0) {
+        elList.innerHTML = '<div class="home-empty">No games to show right now.</div>';
+        return;
+      }
+      elData.matches.forEach((match) => {
+        const game = {
+          league: 'euroleague',
+          homeName: match.homeName,
+          awayName: match.awayName,
+          homeShort: match.homeShort,
+          awayShort: match.awayShort,
+        };
+        const isSelected = multiViewMode && selectedGames.some((s) => gameKey(s) === gameKey(game));
+        const row = document.createElement('div');
+        row.className = 'game-row' + (isSelected ? ' selected' : '');
+        row.innerHTML = `
+          <span class="select-check">${isSelected ? '✓' : ''}</span>
+          <span class="matchup">
+            <img class="team-crest" src="${match.homeCrest}" onerror="this.style.display='none'">
+            ${match.homeName} v ${match.awayName}
+            <img class="team-crest" src="${match.awayCrest}" onerror="this.style.display='none'">
+          </span>
+          <span class="status">${match.date}</span>
+        `;
+        row.addEventListener('click', () => handleGameClick(game));
+        elList.appendChild(row);
       });
     }
 
