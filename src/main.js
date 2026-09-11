@@ -10,7 +10,7 @@ const PANE_MARGIN = 2;
 
 // Text to search for with the Cmd+Shift+D DOM-scan hotkey (see its
 // registration below) — edit and rebuild per investigation.
-const DOM_SCAN_QUERY = 'Short Highlights';
+const DOM_SCAN_QUERY = 'Highlights';
 
 // Parses an HLS media playlist into the VOD-timeline offset of every
 // #EXT-X-DISCONTINUITY marker (broadcast structural boundaries — timeouts,
@@ -464,7 +464,16 @@ function isYouTubeSearchPage(urlString) {
 // doesn't trigger), fire an input event so YouTube's own JS notices,
 // then click the actual submit button — mimicking a genuine user
 // search rather than navigating to a URL directly.
-const EPL_SEARCH_SCRIPT = (query) => `
+// expectedChannelName filters results to the right uploader: a general
+// YouTube search here is NOT scoped to the channel we navigated from
+// (confirmed: it lands on /results?search_query=..., a global search
+// URL, not a channel-scoped one) — a plain team-name search can
+// collide with an unrelated, more famous club/entity sharing the same
+// name (confirmed live: "Hapoel Tel Aviv" the soccer club outranked
+// the EuroLeague basketball one of the same name). Falls back to the
+// first result if no row's visible uploader name matches, so this
+// never regresses to "no result at all" over an exact-text mismatch.
+const EPL_SEARCH_SCRIPT = (query, expectedChannelName) => `
   (async () => {
     const input = document.querySelector('input.ytSearchboxComponentInput');
     const button = document.querySelector('button.ytSearchboxComponentSearchButton');
@@ -477,17 +486,27 @@ const EPL_SEARCH_SCRIPT = (query) => `
     // Results render via client-side routing (no full page load), so
     // poll the DOM instead of waiting on a navigation event.
     // ytd-video-renderer is a normal search-result row; sponsored/ad
-    // slots use other element types, so this naturally skips them and
-    // lands on the first genuine result.
+    // slots use other element types, so this naturally skips them.
     const deadline = Date.now() + 6000;
-    let firstResultLink = null;
-    while (Date.now() < deadline && !firstResultLink) {
-      const firstRow = document.querySelector('ytd-video-renderer');
-      firstResultLink = firstRow && firstRow.querySelector('a#video-title, a#thumbnail');
-      if (!firstResultLink) await new Promise((r) => setTimeout(r, 200));
+    let rows = [];
+    while (Date.now() < deadline && rows.length === 0) {
+      rows = Array.from(document.querySelectorAll('ytd-video-renderer'));
+      if (rows.length === 0) await new Promise((r) => setTimeout(r, 200));
     }
-    if (!firstResultLink) return { ok: false, reason: 'no search results found' };
-    firstResultLink.click();
+    if (rows.length === 0) return { ok: false, reason: 'no search results found' };
+
+    let chosenRow = rows[0];
+    ${expectedChannelName ? `
+    const expected = ${JSON.stringify(expectedChannelName)}.toLowerCase();
+    const byChannel = rows.find((row) => {
+      const nameEl = row.querySelector('ytd-channel-name #text, ytd-channel-name a, #channel-name a');
+      return ((nameEl && nameEl.textContent) || '').toLowerCase().includes(expected);
+    });
+    if (byChannel) chosenRow = byChannel;
+    ` : ''}
+    const resultLink = chosenRow.querySelector('a#video-title, a#thumbnail');
+    if (!resultLink) return { ok: false, reason: 'result row found but no clickable link inside it' };
+    resultLink.click();
     return { ok: true };
   })()
 `;
@@ -539,6 +558,15 @@ const EPL_SEARCH_SCRIPT = (query) => `
 const SHADOW_DOM_SEARCH_HELPERS_JS = `
   function collectWithShadow(root, out) {
     root.querySelectorAll('*').forEach((el) => {
+      // <script>/<style> content is a real TEXT_NODE in the DOM tree
+      // (browsers just don't render it) — confirmed live this was
+      // getting swept into the text search, matching against invisible
+      // JSON/metadata blobs a page embeds (e.g. structured data
+      // mentioning many unrelated teams at once) rather than only real
+      // visible content, which is what made every EuroLeague pane land
+      // on the exact same wrong video regardless of which game was
+      // actually clicked.
+      if (el.tagName === 'SCRIPT' || el.tagName === 'STYLE') return;
       out.push(el);
       if (el.shadowRoot) collectWithShadow(el.shadowRoot, out);
     });
@@ -552,7 +580,7 @@ const SHADOW_DOM_SEARCH_HELPERS_JS = `
       let text = '';
       el.childNodes.forEach((n) => {
         if (n.nodeType === Node.TEXT_NODE) text += n.textContent;
-        else if (n.nodeType === Node.ELEMENT_NODE) text += ownText(n);
+        else if (n.nodeType === Node.ELEMENT_NODE && n.tagName !== 'SCRIPT' && n.tagName !== 'STYLE') text += ownText(n);
       });
       if (el.shadowRoot) text += ownText(el.shadowRoot);
       cache.set(el, text);
@@ -561,6 +589,42 @@ const SHADOW_DOM_SEARCH_HELPERS_JS = `
     let best = null;
     let bestLen = Infinity;
     for (const el of all) {
+      const text = ownText(el);
+      if (text.length < bestLen && needles.every((n) => text.includes(n))) {
+        best = el;
+        bestLen = text.length;
+      }
+    }
+    return best;
+  }
+  // Unlike findSmallestTextMatch, this only considers actual TITLE
+  // elements (a heading tag, or an id/class mentioning "title") —
+  // confirmed necessary live: on a dense video grid, a wrapper spanning
+  // several adjacent, unrelated video cards can have COMBINED text
+  // that happens to satisfy both search needles (one needle from one
+  // card's title, the other from a neighboring card's), even though no
+  // single video actually matches either. Restricting to title-like
+  // elements means a match can only come from one real video's own
+  // title text, never a cross-card coincidence.
+  function findSmallestTitleMatch(...needles) {
+    const all = [];
+    collectWithShadow(document, all);
+    const titleLike = all.filter((el) => /^H[1-6]$/.test(el.tagName) || /title/i.test(el.id || '') || (typeof el.className === 'string' && /title/i.test(el.className)));
+    const cache = new WeakMap();
+    function ownText(el) {
+      if (cache.has(el)) return cache.get(el);
+      let text = '';
+      el.childNodes.forEach((n) => {
+        if (n.nodeType === Node.TEXT_NODE) text += n.textContent;
+        else if (n.nodeType === Node.ELEMENT_NODE && n.tagName !== 'SCRIPT' && n.tagName !== 'STYLE') text += ownText(n);
+      });
+      if (el.shadowRoot) text += ownText(el.shadowRoot);
+      cache.set(el, text);
+      return text;
+    }
+    let best = null;
+    let bestLen = Infinity;
+    for (const el of titleLike) {
       const text = ownText(el);
       if (text.length < bestLen && needles.every((n) => text.includes(n))) {
         best = el;
@@ -644,6 +708,45 @@ const NFL_HIGHLIGHT_SCRIPT = (awayNick, homeNick) => `
     }
     if (!highlightsEl) return { ok: false, reason: 'Short Highlights option not found after opening game card' };
     fireClick(nearestClickable(highlightsEl));
+    return { ok: true };
+  })()
+`;
+
+// EuroLeague: scans the official channel's own Videos tab for a title
+// containing both team names, rather than a YouTube-wide search —
+// avoids search-ranking collisions entirely (a general search for a
+// team name can be dominated by an unrelated, more famous club sharing
+// that name; scanning only the channel's own real uploads sidesteps
+// the problem instead of trying to out-rank it).
+const EL_CHANNEL_VIDEO_SCRIPT = (homeShort, awayShort) => `
+  (async () => {
+    ${SHADOW_DOM_SEARCH_HELPERS_JS}
+    // YouTube's Videos tab lazily loads more thumbnails only as you
+    // scroll — confirmed live: some games (presumably more recently
+    // uploaded, closer to the top) were found immediately every time,
+    // while others failed consistently regardless of how long we
+    // waited, which rules out a pure timing race for those. Scrolling
+    // periodically triggers YouTube's own infinite-scroll loading so
+    // older uploads actually enter the DOM to be searched at all.
+    const deadline = Date.now() + 20000;
+    let matchEl = null;
+    let lastScrollHeight = 0;
+    while (Date.now() < deadline && !matchEl) {
+      matchEl = findSmallestTitleMatch(${JSON.stringify(homeShort)}, ${JSON.stringify(awayShort)});
+      if (matchEl) break;
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      await new Promise((r) => setTimeout(r, 700));
+      // If scrolling stopped loading anything new for a couple of
+      // checks in a row, no amount of further waiting will help.
+      const newHeight = document.documentElement.scrollHeight;
+      if (newHeight === lastScrollHeight) {
+        matchEl = findSmallestTitleMatch(${JSON.stringify(homeShort)}, ${JSON.stringify(awayShort)});
+        if (matchEl) break;
+      }
+      lastScrollHeight = newHeight;
+    }
+    if (!matchEl) return { ok: false, reason: 'no matching video found on channel', searchedFor: [${JSON.stringify(homeShort)}, ${JSON.stringify(awayShort)}] };
+    fireClick(nearestClickable(matchEl));
     return { ok: true };
   })()
 `;
@@ -1051,6 +1154,54 @@ async function getNflHomeData(view) {
   }
 }
 
+// EuroLeague's own backing API (feeds.incrowdsports.com, permissive
+// CORS — confirmed via response headers) gives fixtures/scores/crests
+// in one payload, same clean pattern as Champions League/NFL. Its
+// season-wide "games" list endpoint appears to ignore date/round query
+// params entirely (always returns the same page regardless), so this
+// just filters the current season's default page for completed
+// (`status: "result"`) games — same "today/current, else fall back"
+// idea as NBA's own home data, but done at the season level: the
+// 2026-27 season hasn't started yet (confirmed live, first game is
+// 2026-09-24), so this falls back to the last completed season
+// (season codes are simply "E" + year, e.g. E2025 for 2025-26) to show
+// its final games rather than an empty home page during the off-season.
+async function getEuroLeagueHomeData(view) {
+  const fetchSeasonResults = async (seasonCode) => {
+    const url = `https://feeds.incrowdsports.com/provider/euroleague-feeds/v2/competitions/E/seasons/${seasonCode}/games`;
+    const text = await fetchViaPage(view, url);
+    const data = JSON.parse(text);
+    return (data.data || []).filter((g) => g.status === 'result');
+  };
+  try {
+    let completed = await fetchSeasonResults('E2026');
+    let heading = 'EuroLeague — recent games';
+    if (completed.length === 0) {
+      completed = await fetchSeasonResults('E2025');
+      heading = 'EuroLeague — last season’s final games';
+    }
+    const matches = completed.slice(0, 16).map((g) => ({
+      homeName: g.home.name,
+      awayName: g.away.name,
+      // editorialName ("Barca", "Partizan") is EuroLeague's own short
+      // display name — used for the highlight search below, since
+      // that's much closer to what appears in real video titles than
+      // the full club name (same lesson as EPL/CL's naming mismatches,
+      // avoided here by using a name EuroLeague itself already gives
+      // us rather than guessing one).
+      homeShort: g.home.editorialName || g.home.name,
+      awayShort: g.away.editorialName || g.away.name,
+      homeCrest: g.home.imageUrls?.crest,
+      awayCrest: g.away.imageUrls?.crest,
+      date: g.date.slice(0, 10),
+    }));
+    return { heading, matches };
+  } catch (e) {
+    console.error('getEuroLeagueHomeData failed:', e.message);
+    return { heading: 'EuroLeague — unavailable', matches: [] };
+  }
+}
+
 // ESPN's team names don't match UEFA's own site names (confirmed live:
 // searched for "FC Porto"/"Manchester City" against a page showing
 // "Porto"/"Man City" — a real, understood mismatch, not a guess). Two
@@ -1146,6 +1297,26 @@ const LEAGUE_PROVIDERS = {
       };
     },
   },
+  euroleague: {
+    resolve(game) {
+      const label = `${game.homeName} v ${game.awayName}`;
+      return {
+        // EuroLeague centralizes highlights on ONE official YouTube
+        // channel for every team (confirmed: 613K subscribers, 24K
+        // videos) — unlike EPL, which needed a separate handle per
+        // club, so no per-team lookup table at all here. Goes straight
+        // to the channel's own Videos tab (not a YouTube-wide search —
+        // confirmed that ranking can bury the right video entirely when
+        // a team name collides with a much more famous unrelated club
+        // of the same name, e.g. Hapoel Tel Aviv the soccer club vs.
+        // the EuroLeague basketball one) and scans its real uploads
+        // directly, same technique already proven for Champions League.
+        url: 'https://www.youtube.com/@euroleague/videos',
+        skipCapable: false,
+        label,
+      };
+    },
+  },
 };
 
 // Does whatever's needed after a pane has been pointed at a resolved
@@ -1165,7 +1336,15 @@ function openGameContent(win, pane, game, resolved, layoutAll) {
   let initialDelayMs = 500;
   let hideDuringScript = true;
   if (game.league === 'epl') {
-    script = EPL_SEARCH_SCRIPT(resolved.searchQuery);
+    script = EPL_SEARCH_SCRIPT(resolved.searchQuery, game.homeName);
+    // Originally left hidden here on the assumption YouTube was light
+    // enough not to need this — but the same occlusion-throttling
+    // theory confirmed on Champions League (a hidden/off-screen view
+    // gets throttled like a background tab) is the far likelier
+    // explanation for EPL's own intermittent "player error" failures,
+    // previously written off as generic YouTube flakiness. Applying
+    // the same fix here.
+    hideDuringScript = false;
   } else if (game.league === 'cl') {
     script = CL_HIGHLIGHT_SCRIPT(normalizeClForSearch(game.homeName), normalizeClForSearch(game.awayName));
     // UEFA's fixtures page ships a much heavier JS bundle than
@@ -1189,6 +1368,15 @@ function openGameContent(win, pane, game, resolved, layoutAll) {
     // a heavy modern SPA — it gets throttled like a background tab and
     // may never finish rendering.
     hideDuringScript = false;
+  } else if (game.league === 'euroleague') {
+    script = EL_CHANNEL_VIDEO_SCRIPT(game.homeShort, game.awayShort);
+    hideDuringScript = false;
+    // Confirmed live: some games worked immediately, others landed on
+    // the channel's own About/branding view instead of its Videos
+    // grid — a timing race, not a broken mechanism (the same script
+    // does find real videos once the grid actually renders). The
+    // default 500ms delay before EPL starts polling isn't enough here.
+    initialDelayMs = 2500;
   }
   if (!script) return;
 
@@ -1429,6 +1617,7 @@ function createWindow() {
   ipcMain.handle('get-epl-home-data', () => getEplHomeData(utilityViewEpl));
   ipcMain.handle('get-cl-home-data', () => getClHomeData(utilityViewNba));
   ipcMain.handle('get-nfl-home-data', () => getNflHomeData(utilityViewNba));
+  ipcMain.handle('get-euroleague-home-data', () => getEuroLeagueHomeData(utilityViewNba));
 
   // Plain click on the home page (multi-view off): opens exactly the
   // games pressed, discarding whatever grid existed before. Also used

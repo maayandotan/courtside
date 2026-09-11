@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('courtside', {
   getEplHomeData: () => ipcRenderer.invoke('get-epl-home-data'),
   getClHomeData: () => ipcRenderer.invoke('get-cl-home-data'),
   getNflHomeData: () => ipcRenderer.invoke('get-nfl-home-data'),
+  getEuroLeagueHomeData: () => ipcRenderer.invoke('get-euroleague-home-data'),
   openGames: (games) => ipcRenderer.send('open-games', games),
   addPane: (game) => ipcRenderer.send('add-pane', game),
   replacePane: (id, game) => ipcRenderer.send('replace-pane', { id, game }),
