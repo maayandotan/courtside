@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/logo.png" alt="CourtSide logo" width="120">
+
 # CourtSide
 
 **One desktop app for every game you follow, with a spoiler-safe way to jump straight to the quarter that matters.**
