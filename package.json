@@ -1,8 +1,23 @@
 {
   "name": "courtside",
-  "version": "0.1.0",
+  "version": "0.4.1",
   "private": true,
-  "description": "Desktop shell for concurrent multi-game sports streaming with spoiler-safe skip.",
+  "description": "Desktop shell that unifies sports streaming across NBA, Premier League, Champions League, NFL and EuroLeague, with multi-view and spoiler-safe skip to quarter.",
+  "author": "Maayan Dotan",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maayandotan/courtside.git"
+  },
+  "keywords": [
+    "electron",
+    "sports",
+    "streaming",
+    "multi-view",
+    "widevine",
+    "nba",
+    "premier-league",
+    "nfl"
+  ],
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
