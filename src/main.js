@@ -888,9 +888,23 @@ function loadPrefs() {
   }
 }
 
-function saveFavoriteTeam(tricode) {
+function getFavoriteTeams() {
+  return loadPrefs().favoriteTeams || {};
+}
+
+function saveFavoriteTeam(league, name) {
   const prefs = loadPrefs();
-  prefs.favoriteTeam = tricode;
+  prefs.favoriteTeams = { ...(prefs.favoriteTeams || {}), [league]: name };
+  fs.writeFileSync(PREFS_PATH, JSON.stringify(prefs, null, 2));
+}
+
+function getUserName() {
+  return loadPrefs().userName || null;
+}
+
+function saveUserName(name) {
+  const prefs = loadPrefs();
+  prefs.userName = name;
   fs.writeFileSync(PREFS_PATH, JSON.stringify(prefs, null, 2));
 }
 
@@ -913,68 +927,97 @@ const STATS_HEADERS = { 'x-nba-stats-origin': 'stats', 'x-nba-stats-token': 'tru
 // Home page data: today's games if any exist, otherwise the last
 // completed game from the most recently finished season (currently
 // hardcoded to the 2025-26 season — will need updating once a new
-// season is underway, see README known gaps).
-async function getHomeData(view) {
-  try {
-    const text = await fetchViaPage(view, 'https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json');
-    const games = JSON.parse(text)?.scoreboard?.games || [];
-    if (games.length > 0) {
-      return {
-        heading: "Today's Games",
-        games: games.map((g) => ({
-          gameId: g.gameId,
-          awayTricode: g.awayTeam.teamTricode,
-          homeTricode: g.homeTeam.teamTricode,
-          awayName: g.awayTeam.teamName,
-          homeName: g.homeTeam.teamName,
-          status: g.gameStatusText,
-        })),
-      };
+// season is underway, see README known gaps). An explicit dateStr
+// (YYYY-MM-DD, from the home page's date stepper) fetches that exact
+// date's games instead — tries Regular Season first, then Playoffs,
+// since a single hardcoded season type can't cover a full year of
+// stepping through arbitrary dates the way the original "last
+// completed game" fallback (which only ever needed Playoffs, since
+// this was built right after the Finals) could get away with.
+async function getHomeData(view, dateStr) {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  if (!dateStr || dateStr === todayStr) {
+    try {
+      const text = await fetchViaPage(view, 'https://cdn.nba.com/static/json/liveData/scoreboard/todaysScoreboard_00.json');
+      const games = JSON.parse(text)?.scoreboard?.games || [];
+      if (games.length > 0) {
+        return {
+          heading: "Today's Games",
+          matches: games.map((g) => ({
+            gameId: g.gameId,
+            awayTricode: g.awayTeam.teamTricode,
+            homeTricode: g.homeTeam.teamTricode,
+            awayName: g.awayTeam.teamName,
+            homeName: g.homeTeam.teamName,
+            status: g.gameStatusText,
+          })),
+        };
+      }
+    } catch (e) {
+      console.error('getHomeData: today fetch failed:', e.message);
     }
-  } catch (e) {
-    console.error('getHomeData: today fetch failed:', e.message);
   }
 
-  try {
-    const text = await fetchViaPage(
-      view,
-      'https://stats.nba.com/stats/leaguegamefinder?LeagueID=00&Season=2025-26&SeasonType=Playoffs&PlayerOrTeam=T',
-      STATS_HEADERS
-    );
-    const rs = JSON.parse(text).resultSets[0];
-    const idx = (name) => rs.headers.indexOf(name);
-    const rows = rs.rowSet;
-    if (rows.length > 0) {
-      const lastDate = rows.reduce((max, r) => (r[idx('GAME_DATE')] > max ? r[idx('GAME_DATE')] : max), rows[0][idx('GAME_DATE')]);
-      const lastGameRows = rows.filter((r) => r[idx('GAME_DATE')] === lastDate);
-      let away = null;
-      let home = null;
-      for (const r of lastGameRows) {
+  const targetDate = dateStr || todayStr;
+  const teamName = (tricode) => NBA_TEAMS.find((t) => t.tricode === tricode)?.name || tricode;
+  for (const seasonType of ['Regular Season', 'Playoffs']) {
+    try {
+      const text = await fetchViaPage(
+        view,
+        `https://stats.nba.com/stats/leaguegamefinder?LeagueID=00&Season=2025-26&SeasonType=${encodeURIComponent(seasonType)}&PlayerOrTeam=T`,
+        STATS_HEADERS
+      );
+      const rs = JSON.parse(text).resultSets[0];
+      const idx = (name) => rs.headers.indexOf(name);
+      const rows = rs.rowSet;
+      if (rows.length === 0) continue;
+
+      let dateRows = rows.filter((r) => r[idx('GAME_DATE')] === targetDate);
+      let heading = `Games on ${targetDate}`;
+      let actualDate = targetDate;
+      // No explicit date was requested at all (the original "today has
+      // nothing" case) — fall back to the most recent date available,
+      // same as the pre-stepper behavior.
+      if (dateRows.length === 0 && !dateStr) {
+        const lastDate = rows.reduce((max, r) => (r[idx('GAME_DATE')] > max ? r[idx('GAME_DATE')] : max), rows[0][idx('GAME_DATE')]);
+        dateRows = rows.filter((r) => r[idx('GAME_DATE')] === lastDate);
+        heading = `No games today — last game played (${lastDate})`;
+        actualDate = lastDate;
+      }
+      if (dateRows.length === 0) continue;
+
+      // Group by game id — the original single-game fallback assumed
+      // only one game could ever be on the target date (true only for
+      // the Finals-adjacent case it was built for); a real date needs
+      // to handle several simultaneous games.
+      const byGame = new Map();
+      dateRows.forEach((r) => {
+        const gameId = r[idx('GAME_ID')];
+        const entry = byGame.get(gameId) || {};
         const matchup = r[idx('MATCHUP')];
         const tricode = r[idx('TEAM_ABBREVIATION')];
-        if (matchup.includes('vs.')) home = tricode;
-        else if (matchup.includes('@')) away = tricode;
-      }
-      const teamName = (tricode) => NBA_TEAMS.find((t) => t.tricode === tricode)?.name || tricode;
-      return {
-        heading: `No games today — last game played (${lastDate})`,
-        games: [
-          {
-            gameId: lastGameRows[0][idx('GAME_ID')],
-            awayTricode: away,
-            homeTricode: home,
-            awayName: teamName(away),
-            homeName: teamName(home),
-            status: 'Final',
-          },
-        ],
-      };
+        if (matchup.includes('vs.')) entry.home = tricode;
+        else entry.away = tricode;
+        byGame.set(gameId, entry);
+      });
+      const matches = [...byGame.entries()]
+        .filter(([, { home, away }]) => home && away)
+        .map(([gameId, { home, away }]) => ({
+          gameId,
+          awayTricode: away,
+          homeTricode: home,
+          awayName: teamName(away),
+          homeName: teamName(home),
+          status: 'Final',
+          date: actualDate,
+        }));
+      if (matches.length > 0) return { heading, matches };
+    } catch (e) {
+      console.error(`getHomeData: leaguegamefinder (${seasonType}) failed:`, e.message);
     }
-  } catch (e) {
-    console.error('getHomeData: last-game fallback failed:', e.message);
   }
 
-  return { heading: 'No games available', games: [] };
+  return { heading: dateStr ? `No games on ${dateStr}` : 'No games available', matches: [] };
 }
 
 // Official match highlights are posted by the HOME club's own YouTube
@@ -1058,12 +1101,20 @@ function eplCrestUrl(clubName) {
 // Crest URL pattern (resources.premierleague.com/.../t{clubId}.png) is
 // unverified — try it, and it just won't show if wrong (low-cost to
 // get wrong, unlike a video URL).
-async function getEplHomeData(view) {
+// endDateStr (YYYY-MM-DD, from the home page's week stepper) shifts
+// the fetch window to the 7 days ending on that date instead of "now"
+// — confirmed live that PulseLive's fixtures endpoint actually respects
+// startDate/endDate (unlike its own "games" endpoint equivalents on
+// other leagues' APIs, which ignore query params entirely).
+async function getEplHomeData(view, endDateStr) {
   try {
-    const url = 'https://footballapi.pulselive.com/football/fixtures?comps=1&page=0&pageSize=10&sort=desc&statuses=C';
+    const end = endDateStr ? new Date(`${endDateStr}T23:59:59Z`) : new Date();
+    const start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const fmt = (d) => d.toISOString().slice(0, 10);
+    const url = `https://footballapi.pulselive.com/football/fixtures?comps=1&page=0&pageSize=20&sort=desc&statuses=C&startDate=${fmt(start)}&endDate=${fmt(end)}`;
     const text = await fetchViaPage(view, url);
     const data = JSON.parse(text);
-    const matches = (data.content || []).slice(0, 6).map((m) => {
+    const matches = (data.content || []).slice(0, 16).map((m) => {
       const [teamA, teamB] = m.teams; // array order observed to be [home, away]
       return {
         id: m.id,
@@ -1087,9 +1138,11 @@ async function getEplHomeData(view) {
 // simpler source than what EPL needed. Score is still deliberately
 // left out of what's returned/displayed, matching the no-spoilers
 // pattern used everywhere else.
-async function getClHomeData(view) {
+// endDateStr (YYYY-MM-DD, from the home page's matchday stepper)
+// shifts the whole lookback window instead of always ending at "now".
+async function getClHomeData(view, endDateStr) {
   try {
-    const end = new Date();
+    const end = endDateStr ? new Date(`${endDateStr}T23:59:59Z`) : new Date();
     const start = new Date(end.getTime() - 10 * 24 * 60 * 60 * 1000);
     const fmt = (d) => d.toISOString().slice(0, 10).replace(/-/g, '');
     const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard?dates=${fmt(start)}-${fmt(end)}`;
@@ -1124,9 +1177,11 @@ async function getClHomeData(view) {
   }
 }
 
-async function getNflHomeData(view) {
+// endDateStr (YYYY-MM-DD, from the home page's week stepper) shifts
+// the whole lookback window instead of always ending at "now".
+async function getNflHomeData(view, endDateStr) {
   try {
-    const end = new Date();
+    const end = endDateStr ? new Date(`${endDateStr}T23:59:59Z`) : new Date();
     const start = new Date(end.getTime() - 10 * 24 * 60 * 60 * 1000);
     const fmt = (d) => d.toISOString().slice(0, 10).replace(/-/g, '');
     const url = `https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates=${fmt(start)}-${fmt(end)}`;
@@ -1154,6 +1209,34 @@ async function getNflHomeData(view) {
   }
 }
 
+// Full 32-team roster for the favorite-team picker — the home data
+// above only ever shows whichever ~16 games happened most recently, so
+// deriving favorite-team options from it misses any team that hasn't
+// played lately. Same ESPN source as the home data itself, so names
+// match exactly (no cross-source naming mismatch).
+// Confirmed live: unlike the scoreboard endpoint (which sends
+// Access-Control-Allow-Origin: *), ESPN's own `teams` endpoint sends no
+// CORS header at all, so a page-context fetch to it is blocked
+// outright regardless of origin — not fixable by choosing a different
+// utility view. The NFL's 32-team roster barely ever changes, so this
+// is just hardcoded (same pattern as NBA_TEAMS), using the exact same
+// "City Nickname" naming ESPN's scoreboard endpoint already uses for
+// game data, so favorite-team matching lines up.
+const NFL_TEAMS = [
+  'Arizona Cardinals', 'Atlanta Falcons', 'Baltimore Ravens', 'Buffalo Bills',
+  'Carolina Panthers', 'Chicago Bears', 'Cincinnati Bengals', 'Cleveland Browns',
+  'Dallas Cowboys', 'Denver Broncos', 'Detroit Lions', 'Green Bay Packers',
+  'Houston Texans', 'Indianapolis Colts', 'Jacksonville Jaguars', 'Kansas City Chiefs',
+  'Las Vegas Raiders', 'Los Angeles Chargers', 'Los Angeles Rams', 'Miami Dolphins',
+  'Minnesota Vikings', 'New England Patriots', 'New Orleans Saints', 'New York Giants',
+  'New York Jets', 'Philadelphia Eagles', 'Pittsburgh Steelers', 'San Francisco 49ers',
+  'Seattle Seahawks', 'Tampa Bay Buccaneers', 'Tennessee Titans', 'Washington Commanders',
+];
+
+async function getNflTeams() {
+  return [...NFL_TEAMS].sort();
+}
+
 // EuroLeague's own backing API (feeds.incrowdsports.com, permissive
 // CORS — confirmed via response headers) gives fixtures/scores/crests
 // in one payload, same clean pattern as Champions League/NFL. Its
@@ -1166,7 +1249,16 @@ async function getNflHomeData(view) {
 // 2026-09-24), so this falls back to the last completed season
 // (season codes are simply "E" + year, e.g. E2025 for 2025-26) to show
 // its final games rather than an empty home page during the off-season.
-async function getEuroLeagueHomeData(view) {
+// endDateStr (YYYY-MM-DD, from the home page's matchday stepper) picks
+// a 7-day window from the ALREADY-fetched season data instead of a new
+// network call — EuroLeague's own "games" list endpoint ignores every
+// date/round query param tried (confirmed live), always returning the
+// same default page, so there's no way to actually fetch a different
+// window from the API itself. This means stepping only ever reveals
+// games within whatever range that fixed default page happens to
+// cover (recent games for an in-progress season, or the final
+// stretch for a completed one) — a real, known limitation, not a bug.
+async function getEuroLeagueHomeData(view, endDateStr) {
   const fetchSeasonResults = async (seasonCode) => {
     const url = `https://feeds.incrowdsports.com/provider/euroleague-feeds/v2/competitions/E/seasons/${seasonCode}/games`;
     const text = await fetchViaPage(view, url);
@@ -1180,7 +1272,19 @@ async function getEuroLeagueHomeData(view) {
       completed = await fetchSeasonResults('E2025');
       heading = 'EuroLeague — last season’s final games';
     }
-    const matches = completed.slice(0, 16).map((g) => ({
+    let windowed = completed;
+    if (endDateStr) {
+      const end = new Date(`${endDateStr}T23:59:59Z`).getTime();
+      const start = end - 7 * 24 * 60 * 60 * 1000;
+      windowed = completed.filter((g) => {
+        const t = new Date(g.date).getTime();
+        return t >= start && t <= end;
+      });
+      heading = 'EuroLeague — games this week';
+    } else {
+      windowed = completed.slice(0, 16);
+    }
+    const matches = windowed.map((g) => ({
       homeName: g.home.name,
       awayName: g.away.name,
       // editorialName ("Barca", "Partizan") is EuroLeague's own short
@@ -1199,6 +1303,24 @@ async function getEuroLeagueHomeData(view) {
   } catch (e) {
     console.error('getEuroLeagueHomeData failed:', e.message);
     return { heading: 'EuroLeague — unavailable', matches: [] };
+  }
+}
+
+// Full club roster for the favorite-team picker, same reasoning as
+// NFL's equivalent above — the home data only shows a handful of
+// recent/final games, missing any club that hasn't appeared in them.
+// The current season's participants are known before a ball is
+// bounced, so this doesn't need the same-season/last-season fallback
+// getEuroLeagueHomeData uses.
+async function getEuroLeagueTeams(view) {
+  try {
+    const url = 'https://feeds.incrowdsports.com/provider/euroleague-feeds/v2/competitions/E/seasons/E2026/clubs';
+    const text = await fetchViaPage(view, url);
+    const data = JSON.parse(text);
+    return (data.data || []).map((c) => c.name).sort();
+  } catch (e) {
+    console.error('getEuroLeagueTeams failed:', e.message);
+    return [];
   }
 }
 
@@ -1610,14 +1732,18 @@ function createWindow() {
     layoutAll();
   });
 
-  ipcMain.handle('get-home-data', () => getHomeData(utilityViewNba));
+  ipcMain.handle('get-home-data', (_event, dateStr) => getHomeData(utilityViewNba, dateStr));
   ipcMain.handle('get-teams', () => NBA_TEAMS);
-  ipcMain.handle('get-favorite-team', () => loadPrefs().favoriteTeam || null);
-  ipcMain.on('set-favorite-team', (_event, tricode) => saveFavoriteTeam(tricode));
-  ipcMain.handle('get-epl-home-data', () => getEplHomeData(utilityViewEpl));
-  ipcMain.handle('get-cl-home-data', () => getClHomeData(utilityViewNba));
-  ipcMain.handle('get-nfl-home-data', () => getNflHomeData(utilityViewNba));
-  ipcMain.handle('get-euroleague-home-data', () => getEuroLeagueHomeData(utilityViewNba));
+  ipcMain.handle('get-favorite-teams', () => getFavoriteTeams());
+  ipcMain.handle('get-user-name', () => getUserName());
+  ipcMain.on('set-user-name', (_event, name) => saveUserName(name));
+  ipcMain.on('set-favorite-team', (_event, { league, name }) => saveFavoriteTeam(league, name));
+  ipcMain.handle('get-epl-home-data', (_event, dateStr) => getEplHomeData(utilityViewEpl, dateStr));
+  ipcMain.handle('get-cl-home-data', (_event, dateStr) => getClHomeData(utilityViewNba, dateStr));
+  ipcMain.handle('get-nfl-home-data', (_event, dateStr) => getNflHomeData(utilityViewNba, dateStr));
+  ipcMain.handle('get-euroleague-home-data', (_event, dateStr) => getEuroLeagueHomeData(utilityViewNba, dateStr));
+  ipcMain.handle('get-nfl-teams', () => getNflTeams());
+  ipcMain.handle('get-euroleague-teams', () => getEuroLeagueTeams(utilityViewNba));
 
   // Plain click on the home page (multi-view off): opens exactly the
   // games pressed, discarding whatever grid existed before. Also used
