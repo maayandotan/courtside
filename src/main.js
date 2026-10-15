@@ -1132,6 +1132,31 @@ async function getEplHomeData(view, endDateStr) {
   }
 }
 
+// ESPN's scoreboard endpoint stopped returning anything for multi-day
+// `dates=YYYYMMDD-YYYYMMDD` ranges (confirmed live: a range spanning
+// days that individually have games returns 0 events), while single-day
+// queries still work. So a window is fetched one day at a time, in
+// parallel, and merged — oldest first, matching what a range returned.
+async function fetchEspnScoreboardDays(view, baseUrl, start, end) {
+  const days = [];
+  const cursor = new Date(`${start.toISOString().slice(0, 10)}T00:00:00Z`);
+  while (cursor <= end) {
+    days.push(cursor.toISOString().slice(0, 10).replace(/-/g, ''));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  const pages = await Promise.all(days.map(async (day) => {
+    try {
+      return JSON.parse(await fetchViaPage(view, `${baseUrl}?dates=${day}`)).events || [];
+    } catch (e) {
+      return null;
+    }
+  }));
+  if (pages.every((p) => p === null)) throw new Error('every daily scoreboard request failed');
+  const seen = new Set();
+  return pages.flat().filter((ev) => ev && !seen.has(ev.id) && seen.add(ev.id))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
 // Champions League home data: unlike PulseLive (EPL), ESPN's own
 // soccer scoreboard gives fixtures, real scores, AND team crests all
 // in one payload with no separate id-mismatch to work around — a much
@@ -1144,11 +1169,8 @@ async function getClHomeData(view, endDateStr) {
   try {
     const end = endDateStr ? new Date(`${endDateStr}T23:59:59Z`) : new Date();
     const start = new Date(end.getTime() - 10 * 24 * 60 * 60 * 1000);
-    const fmt = (d) => d.toISOString().slice(0, 10).replace(/-/g, '');
-    const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard?dates=${fmt(start)}-${fmt(end)}`;
-    const text = await fetchViaPage(view, url);
-    const data = JSON.parse(text);
-    const completed = (data.events || []).filter(
+    const events = await fetchEspnScoreboardDays(view, 'https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.champions/scoreboard', start, end);
+    const completed = events.filter(
       (ev) => ev.competitions?.[0]?.status?.type?.name === 'STATUS_FULL_TIME'
     );
     // Show the whole current matchday, not an arbitrary "last N" count
@@ -1183,11 +1205,8 @@ async function getNflHomeData(view, endDateStr) {
   try {
     const end = endDateStr ? new Date(`${endDateStr}T23:59:59Z`) : new Date();
     const start = new Date(end.getTime() - 10 * 24 * 60 * 60 * 1000);
-    const fmt = (d) => d.toISOString().slice(0, 10).replace(/-/g, '');
-    const url = `https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?dates=${fmt(start)}-${fmt(end)}`;
-    const text = await fetchViaPage(view, url);
-    const data = JSON.parse(text);
-    const completed = (data.events || []).filter(
+    const events = await fetchEspnScoreboardDays(view, 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard', start, end);
+    const completed = events.filter(
       (ev) => ev.competitions?.[0]?.status?.type?.name === 'STATUS_FINAL'
     );
     const matches = completed.slice(-16).reverse().map((ev) => {
@@ -1240,27 +1259,19 @@ async function getNflTeams() {
 // EuroLeague's own backing API (feeds.incrowdsports.com, permissive
 // CORS — confirmed via response headers) gives fixtures/scores/crests
 // in one payload, same clean pattern as Champions League/NFL. Its
-// season-wide "games" list endpoint appears to ignore date/round query
-// params entirely (always returns the same page regardless), so this
-// just filters the current season's default page for completed
-// (`status: "result"`) games — same "today/current, else fall back"
-// idea as NBA's own home data, but done at the season level: the
-// 2026-27 season hasn't started yet (confirmed live, first game is
-// 2026-09-24), so this falls back to the last completed season
-// (season codes are simply "E" + year, e.g. E2025 for 2025-26) to show
-// its final games rather than an empty home page during the off-season.
+// "games" list is paginated at 50 items sorted newest-first, so the
+// default page is the END of the season (future fixtures only) — an
+// earlier version misread that as the endpoint "ignoring" date params.
+// `limit=400` returns the whole season (380 games) in one request, which
+// is then filtered client-side for completed (`status: "result"`) games.
+// Falls back to the last completed season (season codes are "E" + year,
+// e.g. E2025) when the new season has no results yet, so the off-season
+// shows the last real games rather than an empty page.
 // endDateStr (YYYY-MM-DD, from the home page's matchday stepper) picks
-// a 7-day window from the ALREADY-fetched season data instead of a new
-// network call — EuroLeague's own "games" list endpoint ignores every
-// date/round query param tried (confirmed live), always returning the
-// same default page, so there's no way to actually fetch a different
-// window from the API itself. This means stepping only ever reveals
-// games within whatever range that fixed default page happens to
-// cover (recent games for an in-progress season, or the final
-// stretch for a completed one) — a real, known limitation, not a bug.
+// a 7-day window from the already-fetched season.
 async function getEuroLeagueHomeData(view, endDateStr) {
   const fetchSeasonResults = async (seasonCode) => {
-    const url = `https://feeds.incrowdsports.com/provider/euroleague-feeds/v2/competitions/E/seasons/${seasonCode}/games`;
+    const url = `https://feeds.incrowdsports.com/provider/euroleague-feeds/v2/competitions/E/seasons/${seasonCode}/games?limit=400`;
     const text = await fetchViaPage(view, url);
     const data = JSON.parse(text);
     return (data.data || []).filter((g) => g.status === 'result');
