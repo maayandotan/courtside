@@ -31,6 +31,11 @@ It exists because of a specific annoyance: watching NBA League Pass replays the 
 - **A welcome flow.** It asks for your name once and greets you on every launch.
 
 <p align="center">
+  <img src="docs/screenshots/multiview.png" alt="Four games from four leagues playing side by side in CourtSide's multi-view grid" width="900"><br>
+  <sub>Multi-view: an NBA game, a Premier League match, a Champions League match and a EuroLeague game side by side. The focused pane (accent border) has the audio and the quarter controls.</sub>
+</p>
+
+<p align="center">
   <img src="docs/screenshots/welcome.png" alt="CourtSide welcome screen" width="520">
 </p>
 
