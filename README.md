@@ -32,7 +32,7 @@ It exists because of a specific annoyance: watching NBA League Pass replays the 
 
 <p align="center">
   <img src="docs/screenshots/multiview.png" alt="Four games from four leagues playing side by side in CourtSide's multi-view grid" width="900"><br>
-  <sub>Multi-view: an NBA game, a Premier League match, a Champions League match and a EuroLeague game side by side. The focused pane (accent border) has the audio and the quarter controls.</sub>
+  <sub>Multi-view: an NBA game, a Premier League match, a Champions League match and a EuroLeague game side by side. The focused pane (accent border) has the audio and the quarter controls. The NBA pane is black because that game is blacked out in my region; CourtSide shows blackouts as they are and never tries to get around them.</sub>
 </p>
 
 <p align="center">
