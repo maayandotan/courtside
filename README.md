@@ -12,6 +12,8 @@ Electron · macOS · NBA · Premier League · Champions League · NFL · EuroLea
   <img src="docs/screenshots/home.png" alt="CourtSide home page: one horizontally scrolling rail of games per league" width="900">
 </p>
 
+> **Work in progress.** The core flows work end to end, but some pieces are still rough. See [Known limitations](#known-limitations-work-in-progress) and the [roadmap](#roadmap).
+
 CourtSide is a personal desktop shell that puts several sports-streaming subscriptions behind one interface. You browse every league's games in one place, press a game, and it opens in the right service, already on the right game. Up to four can play side by side.
 
 It exists because of a specific annoyance: watching NBA League Pass replays the morning after a game (Israel time zone) and wanting to skip to the 4th quarter without seeing the score or a runtime that gives away overtime.
@@ -81,13 +83,17 @@ A few of the more interesting problems this solved (the full account is in [docs
 - **Automation that survives modern sites.** Highlight lookups drive real pages built on shadow DOM (UEFA's Stencil components, YouTube's Lit components), so the scripts walk shadow roots, match only real title elements to avoid cross-card false positives, and dispatch a full pointer/mouse event sequence for sites that ignore a plain `click()`.
 - **A throttling gotcha.** Hiding a pane at 0×0 or off-screen made Chromium throttle it like a background tab, so heavy single-page apps never finished loading during scripted navigation. Leaving the pane genuinely visible fixed two long-standing intermittent failures.
 
-## Known limitations
+## Known limitations (work in progress)
 
-- **Q2 and Q4 skip are coarse.** Only Q3 (halftime) is a hard broadcast break. Q2/Q4 land near the boundary and need a nudge. Two other approaches (an index offset, and anchoring to NBA play-by-play wall-clock times) were tried and failed for real reasons documented in the design log.
-- **Some broadcasts have no skip markers** (a 2026 Finals game had none), so the buttons stay disabled.
-- **NFL playback is flaky.** DAZN's highlight player sometimes fails with a DRM (CDM) error; the click-through itself works.
-- **One EuroLeague game** (Real Madrid v Hapoel Tel Aviv) doesn't match its video, because the video's title uses a different short name.
-- **macOS only,** and desktop only by necessity.
+CourtSide is under active development. These are the open problems, and where each one stands:
+
+| Limitation | Status |
+|---|---|
+| **Q2 and Q4 skip are coarse.** Only Q3 (halftime) is a hard broadcast break, so Q2/Q4 land near the boundary and need a nudge. An index offset and anchoring to NBA play-by-play wall-clock times were both tried and failed for real reasons (see the design log). | 🔧 Working on it. A proper fix needs to know how much time a replay was trimmed from the live broadcast. |
+| **Some broadcasts have no skip markers** (a 2026 Finals game had none), so the buttons stay disabled. | 🔍 Investigating which broadcasts are affected and why. |
+| **NFL playback is flaky.** DAZN's highlight player sometimes fails with a DRM (CDM) error. The click-through itself works. | 🔧 Working on it. The failure is intermittent, so the first step is a reliable reproduction. |
+| **One EuroLeague game** (Real Madrid v Hapoel Tel Aviv) doesn't match its video, because the video's title uses a different short name. | 🔧 Working on it. |
+| **macOS only,** and desktop only by necessity. | Not planned. |
 
 ## Running it
 
