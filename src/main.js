@@ -1538,7 +1538,7 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
-    backgroundColor: '#1d63ff',
+    backgroundColor: '#0b0c0f',
     icon: path.join(__dirname, '..', 'build', 'icon.icns'),
     webPreferences: {
       contextIsolation: true,
