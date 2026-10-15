@@ -8,7 +8,7 @@
     color-scheme: dark;
     --bg: #0b0c0f;
     --header-bg: #14161a;
-    --accent: #1d63ff;
+    --accent: #e8335f;
     --text: #e8e8ea;
     --muted: #9a9ba3;
   }
@@ -16,7 +16,7 @@
   html, body {
     margin: 0;
     height: 100%;
-    background: var(--accent);
+    background: var(--bg);
     font-family: -apple-system, BlinkMacSystemFont, sans-serif;
     color: var(--text);
   }
@@ -39,14 +39,10 @@
   }
   @keyframes welcome-fade-in { from { opacity: 0; } to { opacity: 1; } }
   .welcome-content { text-align: center; max-width: 420px; padding: 0 24px; }
-  .welcome-brand { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 40px; }
-  .welcome-brand-mark {
-    width: 40px; height: 40px; border-radius: 10px;
-    background: var(--accent);
-    display: flex; align-items: center; justify-content: center;
-    font-weight: 800; font-size: 15px;
-  }
-  .welcome-brand-name { font-size: 18px; font-weight: 800; letter-spacing: 0.02em; }
+  .welcome-brand { display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 40px; }
+  .welcome-brand-mark { width: 68px; height: 68px; flex: 0 0 auto; }
+  .wordmark-mark { width: 22px; height: 22px; flex: 0 0 auto; }
+  .welcome-brand-name { font-size: 24px; font-weight: 800; letter-spacing: 0.02em; }
   .welcome-stage h1 { font-size: 32px; font-weight: 800; line-height: 1.2; margin: 0 0 14px; }
   .welcome-copy { font-size: 14px; color: var(--muted); margin: 0 0 20px; }
   #welcome-name-form { display: flex; flex-direction: column; gap: 12px; align-items: center; }
@@ -83,7 +79,7 @@
     padding: 0 16px;
     background: var(--header-bg);
   }
-  .wordmark { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; }
+  .wordmark { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 700; letter-spacing: 0.02em; }
   .subtitle { font-size: 13px; color: var(--muted); margin-left: auto; }
   .home-btn {
     padding: 5px 12px;
@@ -178,7 +174,7 @@
   }
   .game-card:hover { border-color: var(--league-accent, var(--accent)); transform: translateY(-2px); }
   .game-card.favorite { border-color: #ffb020; }
-  .game-card.selected { border-color: var(--accent); background: #1a2540; }
+  .game-card.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, #14161a); }
   .game-card .matchup-row { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 10px; }
   .game-card .team-crest { width: 38px; height: 38px; object-fit: contain; }
   .game-card .vs-label { font-size: 10px; font-weight: 800; color: var(--muted); }
@@ -224,7 +220,7 @@
     padding: 10px 14px;
     margin-bottom: 20px;
     border-radius: 8px;
-    background: #1a2540;
+    background: color-mix(in srgb, var(--accent) 16%, #14161a);
     border: 1px solid var(--accent);
     font-size: 13px;
     max-width: 560px;
@@ -276,7 +272,7 @@
     border: 2px solid transparent;
     border-bottom: none;
   }
-  .pane-cell.focused .pane-label { border-color: var(--accent); background: #1a2540; }
+  .pane-cell.focused .pane-label { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, #14161a); }
   .pane-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
   .pane-cell.focused .pane-dot { background: var(--accent); }
   .pane-label .label-text { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -363,10 +359,30 @@
 </style>
 </head>
 <body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <linearGradient id="cs-grad" gradientUnits="userSpaceOnUse" x1="330" y1="330" x2="700" y2="700">
+        <stop offset="0" stop-color="#ffb020"/>
+        <stop offset="1" stop-color="#e8335f"/>
+      </linearGradient>
+      <clipPath id="cs-ball"><circle cx="534" cy="512" r="126"/></clipPath>
+    </defs>
+    <symbol id="cs-logo" viewBox="0 0 1024 1024">
+      <rect width="1024" height="1024" rx="226" fill="#14161a"/>
+      <path d="M 700.7 342 A 254 254 0 1 0 700.7 682" fill="none" stroke="url(#cs-grad)" stroke-width="92" stroke-linecap="round"/>
+      <circle cx="534" cy="512" r="126" fill="url(#cs-grad)"/>
+      <g clip-path="url(#cs-ball)" fill="none" stroke="#0e0f13" stroke-width="13">
+        <line x1="534" y1="386" x2="534" y2="638"/>
+        <line x1="408" y1="512" x2="660" y2="512"/>
+        <circle cx="679" cy="512" r="126"/>
+        <circle cx="389" cy="512" r="126"/>
+      </g>
+    </symbol>
+  </svg>
   <div id="welcome">
     <div class="welcome-content">
       <div class="welcome-brand">
-        <span class="welcome-brand-mark">CS</span>
+        <svg class="welcome-brand-mark"><use href="#cs-logo"/></svg>
         <span class="welcome-brand-name">CourtSide</span>
       </div>
       <div id="welcome-ask" class="welcome-stage">
@@ -385,7 +401,7 @@
   </div>
 
   <header>
-    <span class="wordmark">CourtSide</span>
+    <span class="wordmark"><svg class="wordmark-mark"><use href="#cs-logo"/></svg>CourtSide</span>
     <button class="home-btn" id="home-btn">Home</button>
     <button class="home-btn" id="add-pane-btn" style="display: none;">+ Add game</button>
     <span class="subtitle">Click a pane's label to focus it</span>
