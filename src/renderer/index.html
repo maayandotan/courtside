@@ -22,6 +22,58 @@
   }
   body { display: flex; flex-direction: column; }
 
+  #welcome {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background:
+      radial-gradient(circle at 15% 20%, rgba(240, 80, 10, 0.35), transparent 40%),
+      radial-gradient(circle at 85% 15%, rgba(108, 59, 209, 0.35), transparent 40%),
+      radial-gradient(circle at 20% 85%, rgba(255, 106, 0, 0.3), transparent 40%),
+      radial-gradient(circle at 85% 80%, rgba(11, 78, 162, 0.35), transparent 40%),
+      var(--bg);
+    animation: welcome-fade-in 0.5s ease;
+  }
+  @keyframes welcome-fade-in { from { opacity: 0; } to { opacity: 1; } }
+  .welcome-content { text-align: center; max-width: 420px; padding: 0 24px; }
+  .welcome-brand { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 40px; }
+  .welcome-brand-mark {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 15px;
+  }
+  .welcome-brand-name { font-size: 18px; font-weight: 800; letter-spacing: 0.02em; }
+  .welcome-stage h1 { font-size: 32px; font-weight: 800; line-height: 1.2; margin: 0 0 14px; }
+  .welcome-copy { font-size: 14px; color: var(--muted); margin: 0 0 20px; }
+  #welcome-name-form { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+  #welcome-name-input {
+    width: 100%;
+    background: var(--header-bg);
+    border: 1px solid #2a2d36;
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 15px;
+    color: var(--text);
+    text-align: center;
+  }
+  #welcome-name-input:focus { outline: none; border-color: var(--accent); }
+  .welcome-btn {
+    padding: 12px 28px;
+    border-radius: 8px;
+    border: none;
+    background: var(--accent);
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .welcome-btn:hover { filter: brightness(1.1); }
+  #welcome-back-name { color: var(--accent); }
+
   header {
     height: 56px;
     flex: 0 0 auto;
@@ -48,45 +100,110 @@
   #home {
     flex: 1 1 auto;
     overflow-y: auto;
-    padding: 24px 32px;
+    padding: 20px 28px 32px;
     background: var(--bg);
   }
-  .home-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
-  .home-toolbar label { font-size: 13px; color: var(--muted); }
-  .home-toolbar select {
+  .home-toolbar { display: flex; align-items: center; justify-content: flex-end; margin-bottom: 18px; }
+
+  /* Each league gets its own accent color so the sections read as
+     distinct "channels" at a glance, like a real sports app's home
+     feed — used on the section's dot and a favorited card's border. */
+  .league-section[data-league="nba"] { --league-accent: #f0500a; }
+  .league-section[data-league="epl"] { --league-accent: #6c3bd1; }
+  .league-section[data-league="cl"] { --league-accent: #0d1f6e; }
+  .league-section[data-league="nfl"] { --league-accent: #0b4ea2; }
+  .league-section[data-league="euroleague"] { --league-accent: #ff6a00; }
+
+  .league-section {
+    margin-bottom: 26px;
+    padding-left: 14px;
+    border-left: 4px solid var(--league-accent, var(--accent));
+    border-radius: 2px;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--league-accent, var(--accent)) 10%, transparent), transparent 220px);
+  }
+  .league-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .league-logo-badge {
+    width: 44px; height: 44px; border-radius: 50%; flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: center;
+    background: #f4f4f4;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--league-accent, var(--accent)) 45%, transparent);
+  }
+  .league-logo-badge img { width: 32px; height: 32px; object-fit: contain; }
+  .league-logo-badge .league-monogram { font-size: 14px; font-weight: 800; color: var(--league-accent, var(--accent)); }
+  .league-name { font-size: 15px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; color: var(--league-accent, var(--accent)); }
+  .league-subtitle { font-size: 12px; color: var(--muted); }
+  .league-favorite-select {
+    margin-left: auto;
     background: var(--header-bg);
     color: var(--text);
     border: 1px solid #2a2d36;
     border-radius: 6px;
-    padding: 6px 10px;
-    font-size: 13px;
+    padding: 5px 8px;
+    font-size: 12px;
+    max-width: 160px;
   }
-  .home-heading { font-size: 14px; font-weight: 700; color: var(--muted); margin-bottom: 12px; }
-  .game-list { display: flex; flex-direction: column; gap: 8px; max-width: 560px; }
-  .game-row {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 14px 16px;
-    background: var(--header-bg);
-    border: 2px solid transparent;
-    border-radius: 8px;
+  .date-stepper { display: flex; align-items: center; gap: 4px; }
+  .date-step-btn {
+    width: 20px; height: 20px;
+    border-radius: 4px;
+    border: none;
+    background: #23262e;
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1;
     cursor: pointer;
   }
-  .game-row:hover { border-color: var(--accent); }
-  .game-row .matchup { font-size: 14px; font-weight: 600; flex: 1 1 auto; display: flex; align-items: center; gap: 8px; }
-  .game-row .status { font-size: 12px; color: var(--muted); }
-  .game-row.favorite { border-color: #ffb020; }
-  .game-row .fav-star { color: #ffb020; margin-right: 4px; }
-  .game-row.selected { border-color: var(--accent); background: #1a2540; }
-  .game-row .select-check {
-    width: 18px; height: 18px; border-radius: 4px; flex: 0 0 auto;
-    border: 2px solid #3a3d46; display: none; align-items: center; justify-content: center; font-size: 12px;
+  .date-step-btn:hover { background: var(--league-accent, var(--accent)); }
+  .date-label { font-size: 11px; color: var(--muted); min-width: 52px; text-align: center; }
+
+  .game-rail {
+    display: flex;
+    gap: 12px;
+    overflow-x: auto;
+    padding: 2px 2px 10px;
+  }
+  .game-rail::-webkit-scrollbar { height: 6px; }
+  .game-rail::-webkit-scrollbar-thumb { background: #23262e; border-radius: 3px; }
+  .home-empty { font-size: 13px; color: var(--muted); padding: 10px 0; }
+
+  .game-card {
+    position: relative;
+    flex: 0 0 188px;
+    background: var(--header-bg);
+    border: 2px solid transparent;
+    border-radius: 12px;
+    padding: 14px 12px 10px;
+    cursor: pointer;
+    transition: transform 0.12s ease, border-color 0.12s ease;
+  }
+  .game-card:hover { border-color: var(--league-accent, var(--accent)); transform: translateY(-2px); }
+  .game-card.favorite { border-color: #ffb020; }
+  .game-card.selected { border-color: var(--accent); background: #1a2540; }
+  .game-card .matchup-row { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 10px; }
+  .game-card .team-crest { width: 38px; height: 38px; object-fit: contain; }
+  .game-card .vs-label { font-size: 10px; font-weight: 800; color: var(--muted); }
+  .game-card .team-names { display: flex; gap: 6px; }
+  .game-card .team-name {
+    flex: 1 1 0; min-width: 0;
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.01em;
+    text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .game-card .status-pill {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid #23262e;
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+  }
+  .game-card .fav-star { position: absolute; top: 8px; left: 10px; color: #ffb020; font-size: 12px; }
+  .game-card .select-check {
+    position: absolute; top: 8px; right: 8px;
+    width: 18px; height: 18px; border-radius: 4px; background: var(--header-bg);
+    border: 2px solid #3a3d46; display: none; align-items: center; justify-content: center; font-size: 11px;
   }
   .multi-view-on .select-check { display: flex; }
-  .game-row.selected .select-check { border-color: var(--accent); background: var(--accent); }
-  .home-empty { font-size: 13px; color: var(--muted); }
-  .team-crest { width: 22px; height: 22px; object-fit: contain; flex: 0 0 auto; }
+  .game-card.selected .select-check { border-color: var(--accent); background: var(--accent); }
 
   .multi-view-toggle {
     padding: 5px 12px;
@@ -246,6 +363,27 @@
 </style>
 </head>
 <body>
+  <div id="welcome">
+    <div class="welcome-content">
+      <div class="welcome-brand">
+        <span class="welcome-brand-mark">CS</span>
+        <span class="welcome-brand-name">CourtSide</span>
+      </div>
+      <div id="welcome-ask" class="welcome-stage">
+        <h1>Every game.<br>One place.</h1>
+        <p class="welcome-copy">What should we call you?</p>
+        <form id="welcome-name-form">
+          <input id="welcome-name-input" type="text" placeholder="Your name" maxlength="40" autocomplete="off" autofocus>
+          <button type="submit" class="welcome-btn">Continue</button>
+        </form>
+      </div>
+      <div id="welcome-back" class="welcome-stage" style="display: none;">
+        <h1>Welcome back,<br><span id="welcome-back-name"></span></h1>
+        <button id="welcome-enter-btn" class="welcome-btn">Enter CourtSide</button>
+      </div>
+    </div>
+  </div>
+
   <header>
     <span class="wordmark">CourtSide</span>
     <button class="home-btn" id="home-btn">Home</button>
@@ -255,11 +393,7 @@
 
   <div id="home">
     <div class="home-toolbar">
-      <label for="favorite-team-select">Favorite team</label>
-      <select id="favorite-team-select">
-        <option value="">None</option>
-      </select>
-      <button class="multi-view-toggle" id="multi-view-toggle" style="margin-left: auto;">Multi-View: Off</button>
+      <button class="multi-view-toggle" id="multi-view-toggle">Multi-View: Off</button>
     </div>
     <div class="home-banner" id="pending-action-banner">
       <span id="pending-action-text"></span>
@@ -269,20 +403,81 @@
       <span id="notice-text"></span>
       <span class="cancel-link" id="notice-dismiss">Dismiss</span>
     </div>
-    <div class="home-heading" id="home-heading">Loading&hellip;</div>
-    <div class="game-list" id="game-list"></div>
 
-    <div class="home-heading" id="epl-heading" style="margin-top: 32px;">Loading&hellip;</div>
-    <div class="game-list" id="epl-list"></div>
+    <div class="league-section" data-league="nba">
+      <div class="league-header">
+        <span class="league-logo-badge"><img src="https://cdn.nba.com/logos/leagues/logo-nba.svg" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'league-monogram',textContent:'NBA'}))"></span>
+        <span class="league-name">NBA</span>
+        <span class="league-subtitle" id="home-heading">Loading&hellip;</span>
+        <span class="date-stepper">
+          <button class="date-step-btn" data-league="nba" data-dir="-1" title="Previous day">&lsaquo;</button>
+          <span class="date-label" id="nba-date-label"></span>
+          <button class="date-step-btn" data-league="nba" data-dir="1" title="Next day">&rsaquo;</button>
+        </span>
+        <select class="league-favorite-select" id="nba-favorite-select"><option value="">Favorite team</option></select>
+      </div>
+      <div class="game-rail" id="game-list"></div>
+    </div>
 
-    <div class="home-heading" id="cl-heading" style="margin-top: 32px;">Loading&hellip;</div>
-    <div class="game-list" id="cl-list"></div>
+    <div class="league-section" data-league="epl">
+      <div class="league-header">
+        <span class="league-logo-badge"><img src="https://a.espncdn.com/i/leaguelogos/soccer/500/23.png" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'league-monogram',textContent:'PL'}))"></span>
+        <span class="league-name">Premier League</span>
+        <span class="league-subtitle" id="epl-heading">Loading&hellip;</span>
+        <span class="date-stepper">
+          <button class="date-step-btn" data-league="epl" data-dir="-1" title="Previous week">&lsaquo;</button>
+          <span class="date-label" id="epl-date-label"></span>
+          <button class="date-step-btn" data-league="epl" data-dir="1" title="Next week">&rsaquo;</button>
+        </span>
+        <select class="league-favorite-select" id="epl-favorite-select"><option value="">Favorite team</option></select>
+      </div>
+      <div class="game-rail" id="epl-list"></div>
+    </div>
 
-    <div class="home-heading" id="nfl-heading" style="margin-top: 32px;">Loading&hellip;</div>
-    <div class="game-list" id="nfl-list"></div>
+    <div class="league-section" data-league="cl">
+      <div class="league-header">
+        <span class="league-logo-badge"><img src="https://a.espncdn.com/i/leaguelogos/soccer/500/2.png" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'league-monogram',textContent:'CL'}))"></span>
+        <span class="league-name">Champions League</span>
+        <span class="league-subtitle" id="cl-heading">Loading&hellip;</span>
+        <span class="date-stepper">
+          <button class="date-step-btn" data-league="cl" data-dir="-1" title="Previous week">&lsaquo;</button>
+          <span class="date-label" id="cl-date-label"></span>
+          <button class="date-step-btn" data-league="cl" data-dir="1" title="Next week">&rsaquo;</button>
+        </span>
+        <select class="league-favorite-select" id="cl-favorite-select"><option value="">Favorite team</option></select>
+      </div>
+      <div class="game-rail" id="cl-list"></div>
+    </div>
 
-    <div class="home-heading" id="el-heading" style="margin-top: 32px;">Loading&hellip;</div>
-    <div class="game-list" id="el-list"></div>
+    <div class="league-section" data-league="nfl">
+      <div class="league-header">
+        <span class="league-logo-badge"><img src="https://a.espncdn.com/i/teamlogos/leagues/500/nfl.png" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'league-monogram',textContent:'NFL'}))"></span>
+        <span class="league-name">NFL</span>
+        <span class="league-subtitle" id="nfl-heading">Loading&hellip;</span>
+        <span class="date-stepper">
+          <button class="date-step-btn" data-league="nfl" data-dir="-1" title="Previous week">&lsaquo;</button>
+          <span class="date-label" id="nfl-date-label"></span>
+          <button class="date-step-btn" data-league="nfl" data-dir="1" title="Next week">&rsaquo;</button>
+        </span>
+        <select class="league-favorite-select" id="nfl-favorite-select"><option value="">Favorite team</option></select>
+      </div>
+      <div class="game-rail" id="nfl-list"></div>
+    </div>
+
+    <div class="league-section" data-league="euroleague">
+      <div class="league-header">
+        <span class="league-logo-badge"><img src="https://upload.wikimedia.org/wikipedia/commons/9/90/EuroLeague_logo.svg" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'league-monogram',textContent:'EL'}))"></span>
+        <span class="league-name">EuroLeague</span>
+        <span class="league-subtitle" id="el-heading">Loading&hellip;</span>
+        <span class="date-stepper">
+          <button class="date-step-btn" data-league="euroleague" data-dir="-1" title="Previous week">&lsaquo;</button>
+          <span class="date-label" id="el-date-label"></span>
+          <button class="date-step-btn" data-league="euroleague" data-dir="1" title="Next week">&rsaquo;</button>
+        </span>
+        <select class="league-favorite-select" id="el-favorite-select"><option value="">Favorite team</option></select>
+      </div>
+      <div class="game-rail" id="el-list"></div>
+    </div>
 
     <div class="watch-selected-bar" id="watch-selected-bar">
       <button class="watch-selected-btn" id="watch-selected-btn" disabled>Watch Selected (0)</button>
@@ -375,10 +570,13 @@
       window.courtside.showHome();
     });
 
-    // --- Home page: favorite team + game list ---
-    const favoriteSelect = document.getElementById('favorite-team-select');
-    const homeHeading = document.getElementById('home-heading');
-    const gameList = document.getElementById('game-list');
+    // --- Home page: one config per league drives a single generic
+    // render path instead of five near-identical copy-pasted ones. Each
+    // config's buildGame() turns one raw match into everything the
+    // generic card renderer needs: the game descriptor (for
+    // open/add/replace-pane and multi-view selection, unchanged from
+    // before), display fields, and which two team identifiers count as
+    // "this league's favorite" for that game.
     const multiViewToggle = document.getElementById('multi-view-toggle');
     const pendingBanner = document.getElementById('pending-action-banner');
     const pendingText = document.getElementById('pending-action-text');
@@ -386,36 +584,262 @@
     const noticeText = document.getElementById('notice-text');
     const watchSelectedBar = document.getElementById('watch-selected-bar');
     const watchSelectedBtn = document.getElementById('watch-selected-btn');
-    let favoriteTeam = null;
+    let favoriteTeams = {}; // { nba: 'NYK', epl: 'Arsenal', ... } — per league
 
-    async function loadHomeView() {
-      const [teams, savedFavorite, homeData, eplData, clData, nflData, elData] = await Promise.all([
-        window.courtside.getTeams(),
-        window.courtside.getFavoriteTeam(),
-        window.courtside.getHomeData(),
-        window.courtside.getEplHomeData(),
-        window.courtside.getClHomeData(),
-        window.courtside.getNflHomeData(),
-        window.courtside.getEuroLeagueHomeData(),
-      ]);
-      favoriteTeam = savedFavorite;
-      favoriteSelect.innerHTML = '<option value="">None</option>' +
-        teams.map((t) => `<option value="${t.tricode}">${t.name}</option>`).join('');
-      favoriteSelect.value = favoriteTeam || '';
-      renderGames(homeData);
-      renderEplMatches(eplData);
-      renderClMatches(clData);
-      renderNflMatches(nflData);
-      renderElMatches(elData);
+    function todayIso() { return new Date().toISOString().slice(0, 10); }
+    function formatDateLabel(dateStr) {
+      return new Date(`${dateStr}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     }
 
-    favoriteSelect.addEventListener('change', () => {
-      favoriteTeam = favoriteSelect.value || null;
-      window.courtside.setFavoriteTeam(favoriteTeam);
-      renderGames(lastHomeData);
+    const leagueConfigs = [
+      {
+        league: 'nba',
+        listEl: document.getElementById('game-list'),
+        headingEl: document.getElementById('home-heading'),
+        selectEl: document.getElementById('nba-favorite-select'),
+        dateLabelEl: document.getElementById('nba-date-label'),
+        stepUnit: 'day',
+        anchorDate: todayIso(),
+        fetchFn: (dateStr) => window.courtside.getHomeData(dateStr),
+        data: { heading: '', matches: [] },
+        emptyText: 'No games to show right now.',
+        // NBA has a real full roster (NBA_TEAMS/get-teams) — every
+        // other league's picker is populated from currently-loaded
+        // games instead (see refreshFavoriteOptions).
+        fixedRoster: null,
+        buildGame(m) {
+          return {
+            game: { league: 'nba', gameId: m.gameId, awayTricode: m.awayTricode, homeTricode: m.homeTricode, awayName: m.awayName, homeName: m.homeName },
+            leftName: m.awayName,
+            rightName: m.homeName,
+            leftCrest: `https://a.espncdn.com/i/teamlogos/nba/500/${m.awayTricode.toLowerCase()}.png`,
+            rightCrest: `https://a.espncdn.com/i/teamlogos/nba/500/${m.homeTricode.toLowerCase()}.png`,
+            separator: '@',
+            statusText: m.status,
+            favoriteCandidates: [m.awayTricode, m.homeTricode],
+            rosterCandidates: [m.awayTricode, m.homeTricode],
+          };
+        },
+      },
+      {
+        league: 'epl',
+        listEl: document.getElementById('epl-list'),
+        headingEl: document.getElementById('epl-heading'),
+        selectEl: document.getElementById('epl-favorite-select'),
+        dateLabelEl: document.getElementById('epl-date-label'),
+        stepUnit: 'week',
+        anchorDate: todayIso(),
+        fetchFn: (dateStr) => window.courtside.getEplHomeData(dateStr),
+        data: { heading: '', matches: [] },
+        emptyText: 'No matches to show right now.',
+        buildGame(m) {
+          return {
+            game: { league: 'epl', homeName: m.homeName, awayName: m.awayName },
+            leftName: m.homeName,
+            rightName: m.awayName,
+            leftCrest: m.homeCrest,
+            rightCrest: m.awayCrest,
+            separator: 'v',
+            statusText: m.date,
+            favoriteCandidates: [m.homeName, m.awayName],
+            rosterCandidates: [m.homeName, m.awayName],
+          };
+        },
+      },
+      {
+        league: 'cl',
+        listEl: document.getElementById('cl-list'),
+        headingEl: document.getElementById('cl-heading'),
+        selectEl: document.getElementById('cl-favorite-select'),
+        dateLabelEl: document.getElementById('cl-date-label'),
+        stepUnit: 'week',
+        anchorDate: todayIso(),
+        fetchFn: (dateStr) => window.courtside.getClHomeData(dateStr),
+        data: { heading: '', matches: [] },
+        emptyText: 'No matches to show right now.',
+        buildGame(m) {
+          return {
+            game: { league: 'cl', homeName: m.homeName, awayName: m.awayName, date: m.date },
+            leftName: m.homeName,
+            rightName: m.awayName,
+            leftCrest: m.homeCrest,
+            rightCrest: m.awayCrest,
+            separator: 'v',
+            statusText: m.date,
+            favoriteCandidates: [m.homeName, m.awayName],
+            rosterCandidates: [m.homeName, m.awayName],
+          };
+        },
+      },
+      {
+        league: 'nfl',
+        listEl: document.getElementById('nfl-list'),
+        headingEl: document.getElementById('nfl-heading'),
+        selectEl: document.getElementById('nfl-favorite-select'),
+        dateLabelEl: document.getElementById('nfl-date-label'),
+        stepUnit: 'week',
+        anchorDate: todayIso(),
+        fetchFn: (dateStr) => window.courtside.getNflHomeData(dateStr),
+        data: { heading: '', matches: [] },
+        emptyText: 'No games to show right now.',
+        buildGame(m) {
+          return {
+            game: { league: 'nfl', homeName: m.homeName, awayName: m.awayName },
+            leftName: m.awayName,
+            rightName: m.homeName,
+            leftCrest: m.awayCrest,
+            rightCrest: m.homeCrest,
+            separator: '@',
+            statusText: m.date,
+            favoriteCandidates: [m.homeName, m.awayName],
+            rosterCandidates: [m.homeName, m.awayName],
+          };
+        },
+      },
+      {
+        league: 'euroleague',
+        listEl: document.getElementById('el-list'),
+        headingEl: document.getElementById('el-heading'),
+        selectEl: document.getElementById('el-favorite-select'),
+        dateLabelEl: document.getElementById('el-date-label'),
+        stepUnit: 'week',
+        anchorDate: todayIso(),
+        fetchFn: (dateStr) => window.courtside.getEuroLeagueHomeData(dateStr),
+        data: { heading: '', matches: [] },
+        emptyText: 'No games to show right now.',
+        buildGame(m) {
+          return {
+            game: { league: 'euroleague', homeName: m.homeName, awayName: m.awayName, homeShort: m.homeShort, awayShort: m.awayShort },
+            leftName: m.homeName,
+            rightName: m.awayName,
+            leftCrest: m.homeCrest,
+            rightCrest: m.awayCrest,
+            separator: 'v',
+            statusText: m.date,
+            favoriteCandidates: [m.homeName, m.awayName],
+            rosterCandidates: [m.homeName, m.awayName],
+          };
+        },
+      },
+    ];
+
+    async function loadHomeView() {
+      const [nbaTeams, nflTeams, elTeams, savedFavorites, ...leagueData] = await Promise.all([
+        window.courtside.getTeams(),
+        window.courtside.getNflTeams(),
+        window.courtside.getEuroLeagueTeams(),
+        window.courtside.getFavoriteTeams(),
+        ...leagueConfigs.map((c) => c.fetchFn(c.anchorDate)),
+      ]);
+      favoriteTeams = savedFavorites || {};
+      const byLeague = (league) => leagueConfigs.find((c) => c.league === league);
+      byLeague('nba').fixedRoster = nbaTeams.map((t) => ({ value: t.tricode, label: t.name }));
+      // NFL/EuroLeague get a full roster (fetched from the same source
+      // as their own home data, so names match exactly) rather than
+      // deriving options from whichever games happen to be loaded —
+      // confirmed live that missed any team that hadn't played
+      // recently. EPL/CL keep deriving from loaded games, since a
+      // matchday's worth of fixtures already covers most/all clubs.
+      if (nflTeams.length) byLeague('nfl').fixedRoster = nflTeams.map((name) => ({ value: name, label: name }));
+      if (elTeams.length) byLeague('euroleague').fixedRoster = elTeams.map((name) => ({ value: name, label: name }));
+      leagueConfigs.forEach((config, i) => {
+        config.data = leagueData[i];
+      });
+      // If a league is between seasons/rounds, "today" (or this week)
+      // often has nothing to show — walk the anchor backward (by the
+      // league's own step unit) until real games turn up, so the
+      // DEFAULT view lands on the last real games rather than an empty
+      // page the user has to manually step back out of. Only runs once
+      // at load — any stepping the user does afterward is left alone.
+      await Promise.all(leagueConfigs.map((config) => ensureNonEmpty(config)));
+      leagueConfigs.forEach(updateDateLabel);
+      leagueConfigs.forEach(refreshFavoriteOptions);
+      renderAll();
+    }
+
+    async function ensureNonEmpty(config) {
+      if (config.data.matches.length > 0) return;
+
+      // Each fetch function already knows how to find the true most
+      // recent date with real games when given no date at all (NBA's
+      // leaguegamefinder fallback, EuroLeague's last-completed-season
+      // fallback) — try that first, since a multi-month off-season gap
+      // can't reliably be crossed by a bounded day/week walk-back below.
+      try {
+        const fallback = await config.fetchFn(undefined);
+        if (fallback.matches.length > 0) {
+          config.data = fallback;
+          const dates = fallback.matches.map((m) => m.date).filter(Boolean);
+          if (dates.length > 0) config.anchorDate = dates.reduce((a, b) => (b > a ? b : a));
+          return;
+        }
+      } catch (e) { /* fall through to manual walk-back */ }
+
+      const days = config.stepUnit === 'day' ? 1 : 7;
+      let attempts = 0;
+      while (config.data.matches.length === 0 && attempts < 12) {
+        const anchor = new Date(`${config.anchorDate}T12:00:00Z`);
+        anchor.setUTCDate(anchor.getUTCDate() - days);
+        config.anchorDate = anchor.toISOString().slice(0, 10);
+        config.data = await config.fetchFn(config.anchorDate);
+        attempts += 1;
+      }
+    }
+
+    function updateDateLabel(config) {
+      config.dateLabelEl.textContent = formatDateLabel(config.anchorDate);
+    }
+
+    // Steps one league's date/week anchor and refetches + re-renders
+    // just that section — other leagues are untouched.
+    async function stepLeagueDate(config, dir) {
+      const days = config.stepUnit === 'day' ? 1 : 7;
+      const anchor = new Date(`${config.anchorDate}T12:00:00Z`);
+      anchor.setUTCDate(anchor.getUTCDate() + dir * days);
+      config.anchorDate = anchor.toISOString().slice(0, 10);
+      updateDateLabel(config);
+      config.data = await config.fetchFn(config.anchorDate);
+      refreshFavoriteOptions(config);
+      renderLeagueSection(config);
+    }
+    document.querySelectorAll('.date-step-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const config = leagueConfigs.find((c) => c.league === btn.dataset.league);
+        stepLeagueDate(config, Number(btn.dataset.dir));
+      });
     });
 
-    // Clicking a game row does one of three things depending on mode:
+    // Populates a league's favorite-team <select> — NBA uses its real
+    // fetched roster; every other league derives options from whatever
+    // teams are in its currently-loaded games (no separate roster fetch
+    // per league, consistent with the rest of the home page's
+    // skeleton-first scope).
+    function refreshFavoriteOptions(config) {
+      let options = config.fixedRoster;
+      if (!options) {
+        const seen = new Map();
+        config.data.matches.forEach((m) => {
+          const built = config.buildGame(m);
+          built.rosterCandidates.forEach((name) => seen.set(name, name));
+        });
+        options = [...seen.keys()].sort().map((name) => ({ value: name, label: name }));
+      }
+      const current = favoriteTeams[config.league] || '';
+      config.selectEl.innerHTML = '<option value="">Favorite team</option>' +
+        options.map((o) => `<option value="${o.value}">${o.label}</option>`).join('');
+      config.selectEl.value = current;
+    }
+
+    leagueConfigs.forEach((config) => {
+      config.selectEl.addEventListener('change', () => {
+        const name = config.selectEl.value || null;
+        favoriteTeams[config.league] = name;
+        window.courtside.setFavoriteTeam(config.league, name);
+        renderLeagueSection(config);
+      });
+    });
+
+    // Clicking a game card does one of three things depending on mode:
     // routes into a pending Swap/Add target, toggles selection in
     // multi-view mode, or (default) opens a fresh grid with just this
     // one game — never the old "always shows NBA + Prem" behavior.
@@ -432,11 +856,7 @@
         const idx = selectedGames.findIndex((g) => gameKey(g) === key);
         if (idx >= 0) selectedGames.splice(idx, 1);
         else if (selectedGames.length < 4) selectedGames.push(game);
-        renderGames(lastHomeData);
-        renderEplMatches(lastEplData);
-        renderClMatches(lastClData);
-        renderNflMatches(lastNflData);
-        renderElMatches(lastElData);
+        renderAll();
         updateWatchSelectedUI();
         return;
       }
@@ -468,11 +888,7 @@
     function updateMultiViewUI() {
       multiViewToggle.textContent = `Multi-View: ${multiViewMode ? 'On' : 'Off'}`;
       multiViewToggle.classList.toggle('on', multiViewMode);
-      gameList.classList.toggle('multi-view-on', multiViewMode);
-      eplList.classList.toggle('multi-view-on', multiViewMode);
-      clList.classList.toggle('multi-view-on', multiViewMode);
-      nflList.classList.toggle('multi-view-on', multiViewMode);
-      elList.classList.toggle('multi-view-on', multiViewMode);
+      leagueConfigs.forEach((config) => config.listEl.classList.toggle('multi-view-on', multiViewMode));
       updateWatchSelectedUI();
     }
     function updateWatchSelectedUI() {
@@ -486,11 +902,7 @@
       pendingAction = null;
       updatePendingBanner();
       updateMultiViewUI();
-      renderGames(lastHomeData);
-      renderEplMatches(lastEplData);
-      renderClMatches(lastClData);
-      renderNflMatches(lastNflData);
-      renderElMatches(lastElData);
+      renderAll();
     });
     watchSelectedBtn.addEventListener('click', () => {
       if (selectedGames.length === 0) return;
@@ -500,200 +912,83 @@
       updateMultiViewUI();
     });
 
-    let lastHomeData = { heading: '', games: [] };
+    function renderAll() {
+      leagueConfigs.forEach(renderLeagueSection);
+    }
 
-    function renderGames(homeData) {
-      lastHomeData = homeData;
-      homeHeading.textContent = homeData.heading;
-      gameList.innerHTML = '';
-      if (homeData.games.length === 0) {
-        gameList.innerHTML = '<div class="home-empty">No games to show right now.</div>';
+    function renderLeagueSection(config) {
+      const { data, listEl, headingEl } = config;
+      headingEl.textContent = data.heading;
+      listEl.innerHTML = '';
+      if (data.matches.length === 0) {
+        listEl.innerHTML = `<div class="home-empty">${config.emptyText}</div>`;
         return;
       }
-      homeData.games.forEach((g) => {
-        const game = {
-          league: 'nba',
-          gameId: g.gameId,
-          awayTricode: g.awayTricode,
-          homeTricode: g.homeTricode,
-          awayName: g.awayName,
-          homeName: g.homeName,
-        };
-        const isFavorite = favoriteTeam && (g.awayTricode === favoriteTeam || g.homeTricode === favoriteTeam);
-        const isSelected = multiViewMode && selectedGames.some((s) => gameKey(s) === gameKey(game));
-        const awayLogo = `https://a.espncdn.com/i/teamlogos/nba/500/${g.awayTricode.toLowerCase()}.png`;
-        const homeLogo = `https://a.espncdn.com/i/teamlogos/nba/500/${g.homeTricode.toLowerCase()}.png`;
-        const row = document.createElement('div');
-        row.className = 'game-row' + (isFavorite ? ' favorite' : '') + (isSelected ? ' selected' : '');
-        row.innerHTML = `
+      data.matches.forEach((match) => {
+        const built = config.buildGame(match);
+        const fav = favoriteTeams[config.league];
+        const isFavorite = !!fav && built.favoriteCandidates.includes(fav);
+        const isSelected = multiViewMode && selectedGames.some((s) => gameKey(s) === gameKey(built.game));
+        const card = document.createElement('div');
+        card.className = 'game-card' + (isFavorite ? ' favorite' : '') + (isSelected ? ' selected' : '');
+        card.innerHTML = `
+          ${isFavorite ? '<span class="fav-star">★</span>' : ''}
           <span class="select-check">${isSelected ? '✓' : ''}</span>
-          <span class="matchup">
-            ${isFavorite ? '<span class="fav-star">★</span>' : ''}
-            <img class="team-crest" src="${awayLogo}" onerror="this.style.display='none'">
-            ${g.awayName} @ ${g.homeName}
-            <img class="team-crest" src="${homeLogo}" onerror="this.style.display='none'">
-          </span>
-          <span class="status">${g.status}</span>
+          <div class="matchup-row">
+            <img class="team-crest" src="${built.leftCrest}" onerror="this.style.display='none'">
+            <span class="vs-label">${built.separator}</span>
+            <img class="team-crest" src="${built.rightCrest}" onerror="this.style.display='none'">
+          </div>
+          <div class="team-names">
+            <span class="team-name">${built.leftName}</span>
+            <span class="team-name">${built.rightName}</span>
+          </div>
+          <div class="status-pill">${built.statusText}</div>
         `;
-        row.addEventListener('click', () => handleGameClick(game));
-        gameList.appendChild(row);
+        card.addEventListener('click', () => handleGameClick(built.game));
+        listEl.appendChild(card);
       });
     }
 
-    // Premier League: deliberately no score in this data at all (see
-    // getEplHomeData in main.js) — clicking a match searches within the
-    // home club's own official YouTube channel only, never a general
-    // search, so results are always official highlights.
-    const eplHeading = document.getElementById('epl-heading');
-    const eplList = document.getElementById('epl-list');
-    let lastEplData = { heading: '', matches: [] };
+    initWelcome();
 
-    function renderEplMatches(eplData) {
-      lastEplData = eplData;
-      eplHeading.textContent = eplData.heading;
-      eplList.innerHTML = '';
-      if (eplData.matches.length === 0) {
-        eplList.innerHTML = '<div class="home-empty">No matches to show right now.</div>';
-        return;
+    async function initWelcome() {
+      const welcomeEl = document.getElementById('welcome');
+      const askStage = document.getElementById('welcome-ask');
+      const backStage = document.getElementById('welcome-back');
+      const nameForm = document.getElementById('welcome-name-form');
+      const nameInput = document.getElementById('welcome-name-input');
+      const backNameEl = document.getElementById('welcome-back-name');
+      const enterBtn = document.getElementById('welcome-enter-btn');
+
+      function enterApp() {
+        welcomeEl.style.display = 'none';
+        showHome();
+        loadHomeView();
       }
-      eplData.matches.forEach((match) => {
-        const game = { league: 'epl', homeName: match.homeName, awayName: match.awayName };
-        const isSelected = multiViewMode && selectedGames.some((s) => gameKey(s) === gameKey(game));
-        const row = document.createElement('div');
-        row.className = 'game-row' + (isSelected ? ' selected' : '');
-        row.innerHTML = `
-          <span class="select-check">${isSelected ? '✓' : ''}</span>
-          <span class="matchup">
-            <img class="team-crest" src="${match.homeCrest}" onerror="this.style.display='none'">
-            ${match.homeName} v ${match.awayName}
-            <img class="team-crest" src="${match.awayCrest}" onerror="this.style.display='none'">
-          </span>
-          <span class="status">${match.date}</span>
-        `;
-        row.addEventListener('click', () => handleGameClick(game));
-        eplList.appendChild(row);
-      });
-    }
 
-    // Champions League: clicking a match opens UEFA's own fixtures page
-    // for that date and scripts a click on the match's highlights
-    // thumbnail (only visible once logged into a UEFA account — the
-    // user logs in manually within the pane, same pattern as DAZN/
-    // League Pass elsewhere in this app). No score shown here either,
-    // same no-spoilers pattern as NBA/EPL.
-    const clHeading = document.getElementById('cl-heading');
-    const clList = document.getElementById('cl-list');
-    let lastClData = { heading: '', matches: [] };
-
-    function renderClMatches(clData) {
-      lastClData = clData;
-      clHeading.textContent = clData.heading;
-      clList.innerHTML = '';
-      if (clData.matches.length === 0) {
-        clList.innerHTML = '<div class="home-empty">No matches to show right now.</div>';
-        return;
+      const existingName = await window.courtside.getUserName();
+      if (existingName) {
+        backNameEl.textContent = existingName;
+        askStage.style.display = 'none';
+        backStage.style.display = 'block';
+      } else {
+        askStage.style.display = 'block';
+        backStage.style.display = 'none';
       }
-      clData.matches.forEach((match) => {
-        const game = { league: 'cl', homeName: match.homeName, awayName: match.awayName, date: match.date };
-        const isSelected = multiViewMode && selectedGames.some((s) => gameKey(s) === gameKey(game));
-        const row = document.createElement('div');
-        row.className = 'game-row' + (isSelected ? ' selected' : '');
-        row.innerHTML = `
-          <span class="select-check">${isSelected ? '✓' : ''}</span>
-          <span class="matchup">
-            <img class="team-crest" src="${match.homeCrest}" onerror="this.style.display='none'">
-            ${match.homeName} v ${match.awayName}
-            <img class="team-crest" src="${match.awayCrest}" onerror="this.style.display='none'">
-          </span>
-          <span class="status">${match.date}</span>
-        `;
-        row.addEventListener('click', () => handleGameClick(game));
-        clList.appendChild(row);
+
+      nameForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const name = nameInput.value.trim();
+        if (!name) return;
+        window.courtside.setUserName(name);
+        backNameEl.textContent = name;
+        askStage.style.display = 'none';
+        backStage.style.display = 'block';
       });
+
+      enterBtn.addEventListener('click', enterApp);
     }
-
-    // NFL: clicking a game opens DAZN's Game Pass schedule and scripts
-    // a click into the matched game card, then into its free "Short
-    // Highlights" option specifically (Ad-Free Replay/Full Replay/Game
-    // in 40 all require an NFL Game Pass subscription this app never
-    // tries to unlock). No score shown, same pattern as NBA/EPL/CL.
-    const nflHeading = document.getElementById('nfl-heading');
-    const nflList = document.getElementById('nfl-list');
-    let lastNflData = { heading: '', matches: [] };
-
-    function renderNflMatches(nflData) {
-      lastNflData = nflData;
-      nflHeading.textContent = nflData.heading;
-      nflList.innerHTML = '';
-      if (nflData.matches.length === 0) {
-        nflList.innerHTML = '<div class="home-empty">No games to show right now.</div>';
-        return;
-      }
-      nflData.matches.forEach((match) => {
-        const game = { league: 'nfl', homeName: match.homeName, awayName: match.awayName };
-        const isSelected = multiViewMode && selectedGames.some((s) => gameKey(s) === gameKey(game));
-        const row = document.createElement('div');
-        row.className = 'game-row' + (isSelected ? ' selected' : '');
-        row.innerHTML = `
-          <span class="select-check">${isSelected ? '✓' : ''}</span>
-          <span class="matchup">
-            <img class="team-crest" src="${match.awayCrest}" onerror="this.style.display='none'">
-            ${match.awayName} @ ${match.homeName}
-            <img class="team-crest" src="${match.homeCrest}" onerror="this.style.display='none'">
-          </span>
-          <span class="status">${match.date}</span>
-        `;
-        row.addEventListener('click', () => handleGameClick(game));
-        nflList.appendChild(row);
-      });
-    }
-
-    // EuroLeague: clicking a match opens the league's single official
-    // YouTube channel (unlike EPL's per-club channels) and scripts the
-    // same search-and-click used there. homeShort/awayShort are
-    // EuroLeague's own short display names ("Barca", "Partizan"),
-    // carried straight through as part of the game descriptor since
-    // they're closer to real video-title wording than the full club
-    // names — avoids needing a guessed alias map at all.
-    const elHeading = document.getElementById('el-heading');
-    const elList = document.getElementById('el-list');
-    let lastElData = { heading: '', matches: [] };
-
-    function renderElMatches(elData) {
-      lastElData = elData;
-      elHeading.textContent = elData.heading;
-      elList.innerHTML = '';
-      if (elData.matches.length === 0) {
-        elList.innerHTML = '<div class="home-empty">No games to show right now.</div>';
-        return;
-      }
-      elData.matches.forEach((match) => {
-        const game = {
-          league: 'euroleague',
-          homeName: match.homeName,
-          awayName: match.awayName,
-          homeShort: match.homeShort,
-          awayShort: match.awayShort,
-        };
-        const isSelected = multiViewMode && selectedGames.some((s) => gameKey(s) === gameKey(game));
-        const row = document.createElement('div');
-        row.className = 'game-row' + (isSelected ? ' selected' : '');
-        row.innerHTML = `
-          <span class="select-check">${isSelected ? '✓' : ''}</span>
-          <span class="matchup">
-            <img class="team-crest" src="${match.homeCrest}" onerror="this.style.display='none'">
-            ${match.homeName} v ${match.awayName}
-            <img class="team-crest" src="${match.awayCrest}" onerror="this.style.display='none'">
-          </span>
-          <span class="status">${match.date}</span>
-        `;
-        row.addEventListener('click', () => handleGameClick(game));
-        elList.appendChild(row);
-      });
-    }
-
-    showHome();
-    loadHomeView();
 
     function buildPaneCell(id, label, skipCapable, league) {
       skipCapableById.set(id, skipCapable);
