@@ -25,7 +25,9 @@
     "sign:vmp": ".evs-venv/bin/evs-vmp sign-pkg dist/mac-arm64",
     "sign:codesign": "codesign --deep --force --sign - dist/mac-arm64/CourtSide.app",
     "build:mac": "npm run pack && npm run sign:vmp && npm run sign:codesign",
-    "open": "open dist/mac-arm64/CourtSide.app"
+    "open": "open dist/mac-arm64/CourtSide.app",
+    "check": "node scripts/check.js",
+    "test": "node --test \"tests/*.test.js\""
   },
   "devDependencies": {
     "electron": "github:castlabs/electron-releases#v44.1.0+wvcus",
@@ -45,5 +47,6 @@
       "identity": null,
       "icon": "build/icon.icns"
     }
-  }
+  },
+  "license": "MIT"
 }
