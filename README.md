@@ -8,6 +8,11 @@
 
 Electron · macOS · NBA · Premier League · Champions League · NFL · EuroLeague
 
+[![CI](https://github.com/maayandotan/courtside/actions/workflows/ci.yml/badge.svg)](https://github.com/maayandotan/courtside/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/maayandotan/courtside?color=e8335f)](https://github.com/maayandotan/courtside/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-ffb020.svg)](LICENSE)
+![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey)
+
 </div>
 
 <p align="center">
@@ -19,6 +24,12 @@ Electron · macOS · NBA · Premier League · Champions League · NFL · EuroLea
 CourtSide is a personal desktop shell that puts several sports-streaming subscriptions behind one interface. You browse every league's games in one place, press a game, and it opens in the right service, already on the right game. Up to four can play side by side.
 
 It exists because of a specific annoyance: watching NBA League Pass replays the morning after a game (Israel time zone) and wanting to skip to the 4th quarter without seeing the score or a runtime that gives away overtime.
+
+**At a glance**
+
+- **Stack:** Electron (castlabs fork, for Widevine DRM), Node.js, and a plain JavaScript/HTML/CSS renderer with no UI framework. Chrome DevTools Protocol and HLS for the skip feature.
+- **Engineering:** about 3,000 lines of code, unit tests and CI on every push, and a pull request for every change with tagged releases.
+- **Scope:** one author, built from a real personal problem and shipped end to end, including the dead ends (see the [design log](docs/DESIGN_LOG.md)).
 
 ## Features
 
@@ -115,6 +126,29 @@ npm run open                          # launch dist/mac-arm64/CourtSide.app
 ```
 
 You also need your own subscriptions or logins for whichever services you want to use (NBA League Pass, DAZN, a UEFA account). Anything that is free, like the EPL, EuroLeague and NFL highlights, works without one.
+
+## Project structure
+
+```
+src/
+  main.js                  Electron main process: windows, panes, IPC, per-league data and highlight scripts
+  preload.js               The narrow IPC bridge exposed to the renderer
+  lib/skip-heuristics.js   HLS manifest parsing and the quarter-start heuristic (pure, unit-tested)
+  lib/names.js             Team-name normalization for on-page search (pure, unit-tested)
+  renderer/index.html      Home page, welcome flow and pane chrome
+tests/                     Node's built-in test runner, no dependencies
+scripts/                   Icon and social-preview generators, syntax checker
+docs/                      Design log, screenshots, logo
+```
+
+## Development
+
+```bash
+npm run check   # syntax-check every script, including the renderer's inline one
+npm test        # unit tests for the pure logic
+```
+
+Both run in CI on every push and pull request. Anything that touches real streams needs the signed build described above, because commercial DRM services reject an unsigned one.
 
 ## Roadmap
 
